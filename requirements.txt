@@ -5,3 +5,4 @@ numpy==1.26.4
 plotly==5.20.0
 flask-cors==4.0.0
 requests==2.31.0
+reportlab==4.2.2

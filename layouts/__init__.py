@@ -1,3 +1,4 @@
 from layouts.dashboard import build_dashboard_layout
 from layouts.history import build_history_layout
 from layouts.config import build_config_layout, register_callbacks as register_config_callbacks
+from layouts.report import build_report_layout

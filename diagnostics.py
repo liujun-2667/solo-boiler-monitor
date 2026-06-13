@@ -22,6 +22,7 @@ def diagnose(data, metrics):
 
     if exhaust > exhaust_temp_high and o2 > 5:
         suggestions.append({
+            "rule_key": "exhaust_high_o2_high",
             "priority": 50,
             "urgency": "高",
             "diagnosis": f"排烟温度{exhaust:.1f}℃(阈值{exhaust_temp_high}℃)且氧量{o2:.1f}%偏高",
@@ -31,6 +32,7 @@ def diagnose(data, metrics):
 
     if co > co_spike and o2 < 3.5:
         suggestions.append({
+            "rule_key": "co_spike_o2_low",
             "priority": 60,
             "urgency": "高",
             "diagnosis": f"CO浓度{co:.0f}ppm(阈值{co_spike}ppm)且氧量{o2:.1f}%偏低",
@@ -40,6 +42,7 @@ def diagnose(data, metrics):
 
     if fly_ash > fly_ash_high and coal > 100:
         suggestions.append({
+            "rule_key": "fly_ash_high_coal_high",
             "priority": 45,
             "urgency": "中",
             "diagnosis": f"飞灰含碳量{fly_ash:.1f}%(阈值{fly_ash_high}%)且给煤量{coal:.1f}t/h偏高",
@@ -54,6 +57,7 @@ def diagnose(data, metrics):
         diff = max(sh_temps) - min(sh_temps)
         if diff > sh_diff:
             suggestions.append({
+                "rule_key": "sh_temp_diff",
                 "priority": 40,
                 "urgency": "中",
                 "diagnosis": f"过热器最大温差{diff:.1f}℃(阈值{sh_diff}℃)",
@@ -65,6 +69,7 @@ def diagnose(data, metrics):
     if abs(o2_dev) > o2_dev_thresh:
         direction = "偏高" if o2_dev > 0 else "偏低"
         suggestions.append({
+            "rule_key": "o2_deviation",
             "priority": 35,
             "urgency": "低",
             "diagnosis": f"氧量偏差{o2_dev:+.2f}%(阈值±{o2_dev_thresh}%)，氧量{direction}",
@@ -75,6 +80,7 @@ def diagnose(data, metrics):
     main_steam_temp = data.get("main_steam_temp") or 0
     if main_steam_temp < 520:
         suggestions.append({
+            "rule_key": "main_steam_temp_low",
             "priority": 30,
             "urgency": "中",
             "diagnosis": f"主蒸汽温度{main_steam_temp:.1f}℃偏低",
@@ -90,6 +96,5 @@ def diagnose(data, metrics):
 
 def persist_suggestions(boiler_id, data, metrics):
     new_sugs = diagnose(data, metrics)
-    for s in new_sugs:
-        db.add_suggestion(boiler_id, s)
+    db.replace_suggestions(boiler_id, new_sugs)
     return db.get_active_suggestions(boiler_id)

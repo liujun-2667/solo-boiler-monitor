@@ -21,6 +21,7 @@ from layouts import (
     build_history_layout,
     build_config_layout,
     register_config_callbacks,
+    build_report_layout,
 )
 from layouts.dashboard import (
     KEY_PARAMS,
@@ -84,6 +85,7 @@ def build_main_navbar():
                     [
                         dbc.NavItem(dbc.NavLink("实时监控", href="/", active="exact", style={"color": "#fff"})),
                         dbc.NavItem(dbc.NavLink("历史分析", href="/history", active="exact", style={"color": "#fff"})),
+                        dbc.NavItem(dbc.NavLink("合规报告", href="/report", active="exact", style={"color": "#fff"})),
                         dbc.NavItem(dbc.NavLink("系统配置", href="/config", active="exact", style={"color": "#fff"})),
                     ],
                     pills=True,
@@ -115,6 +117,8 @@ app.layout = html.Div(
 def display_page(pathname):
     if pathname == "/history":
         return build_history_layout()
+    elif pathname == "/report":
+        return build_report_layout()
     elif pathname == "/config":
         return build_config_layout()
     else:
@@ -357,23 +361,31 @@ def toggle_custom_time(v):
     return {"display": "none"}
 
 
+STAT_CARD_IDS = ["avg-eff", "max-eff", "min-eff", "std-eff", "avg-q2", "avg-q3", "avg-q4", "avg-q5"]
+
+
 @app.callback(
-    Output("trend-chart", "figure"),
-    [Input("history-query-btn", "n_clicks")],
+    Output("history-query-store", "data"),
+    [Input("history-query-btn", "n_clicks"), Input("history-boiler-select", "value"), Input("history-time-range", "value")],
     [
-        State("history-boiler-select", "value"),
-        State("history-time-range", "value"),
         State("history-start-date", "date"),
         State("history-start-time", "value"),
         State("history-end-date", "date"),
         State("history-end-time", "value"),
-        State("trend-y1-params", "value"),
-        State("trend-y2-params", "value"),
     ],
 )
-def update_trend_chart(_, boiler_id, time_range, sd, st, ed, et, y1_params, y2_params):
+def fetch_history_data(n_clicks, boiler_id, time_range, sd, st, ed, et):
     start_iso, end_iso = _parse_time_range(time_range, sd, st, ed, et)
     data = db.get_aggregated_range(boiler_id or "Boiler-1", start_iso, end_iso)
+    return data
+
+
+@app.callback(
+    Output("trend-chart", "figure"),
+    [Input("history-query-store", "data")],
+    [State("trend-y1-params", "value"), State("trend-y2-params", "value")],
+)
+def update_trend_chart(data, y1_params, y2_params):
     point_limits = db.get_point_limits()
     fig = go.Figure()
     if not data:
@@ -409,28 +421,49 @@ def update_trend_chart(_, boiler_id, time_range, sd, st, ed, et, y1_params, y2_p
 
 
 @app.callback(
-    [
-        Output("efficiency-histogram", "figure"),
-    ],
-    [Input("history-query-btn", "n_clicks")],
-    [
-        State("history-boiler-select", "value"),
-        State("history-time-range", "value"),
-        State("history-start-date", "date"),
-        State("history-start-time", "value"),
-        State("history-end-date", "date"),
-        State("history-end-time", "value"),
-    ],
+    [Output("efficiency-histogram", "figure")]
+    + [Output(f"stat-value-{cid}", "children") for cid in STAT_CARD_IDS]
+    + [Output("stat-sub-max-eff", "children"), Output("stat-sub-min-eff", "children")],
+    [Input("history-query-store", "data")],
 )
-def update_efficiency_stats(_, boiler_id, time_range, sd, st, ed, et):
-    start_iso, end_iso = _parse_time_range(time_range, sd, st, ed, et)
-    data = db.get_aggregated_range(boiler_id or "Boiler-1", start_iso, end_iso)
+def update_efficiency_stats(data):
     fig = go.Figure()
+    card_defaults = ["-- %"] * 8
+    sub_max, sub_min = "--:--:--", "--:--:--"
     if not data:
-        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        return [fig]
-    eff_vals = [d.get("efficiency") for d in data if d.get("efficiency") is not None]
-    if eff_vals:
+        fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=100)
+        return [fig] + card_defaults + [sub_max, sub_min]
+    eff_pairs = [(d.get("efficiency"), d.get("window_start")) for d in data if d.get("efficiency") is not None]
+    q2_vals = [d.get("q2") for d in data if d.get("q2") is not None]
+    q3_vals = [d.get("q3") for d in data if d.get("q3") is not None]
+    q4_vals = [d.get("q4") for d in data if d.get("q4") is not None]
+    q5_vals = [d.get("q5") for d in data if d.get("q5") is not None]
+    if eff_pairs:
+        eff_vals = [p[0] for p in eff_pairs]
+        avg_eff = statistics.mean(eff_vals)
+        max_eff = max(eff_vals)
+        min_eff = min(eff_vals)
+        std_eff = statistics.stdev(eff_vals) if len(eff_vals) > 1 else 0
+        max_ts = next(p[1] for p in eff_pairs if p[0] == max_eff)
+        min_ts = next(p[1] for p in eff_pairs if p[0] == min_eff)
+        try:
+            sub_max = datetime.fromisoformat(max_ts).strftime("%H:%M:%S")
+        except Exception:
+            sub_max = max_ts[11:19] if len(max_ts) > 19 else max_ts
+        try:
+            sub_min = datetime.fromisoformat(min_ts).strftime("%H:%M:%S")
+        except Exception:
+            sub_min = min_ts[11:19] if len(min_ts) > 19 else min_ts
+        card_defaults = [
+            f"{avg_eff:.2f} %",
+            f"{max_eff:.2f} %",
+            f"{min_eff:.2f} %",
+            f"{std_eff:.3f}",
+            f"{statistics.mean(q2_vals):.2f} %" if q2_vals else "-- %",
+            f"{statistics.mean(q3_vals):.2f} %" if q3_vals else "-- %",
+            f"{statistics.mean(q4_vals):.2f} %" if q4_vals else "-- %",
+            f"{statistics.mean(q5_vals):.2f} %" if q5_vals else "-- %",
+        ]
         fig.add_trace(go.Histogram(x=eff_vals, nbinsx=12, marker_color=ACCENT_GREEN, opacity=0.8))
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
@@ -440,26 +473,16 @@ def update_efficiency_stats(_, boiler_id, time_range, sd, st, ed, et):
         margin=dict(l=10, r=10, t=10, b=10),
         height=100,
     )
-    return [fig]
+    return [fig] + card_defaults + [sub_max, sub_min]
 
 
 @app.callback(
     Output("corr-scatter-chart", "figure"),
     Output("corr-pearson-value", "children"),
     Output("corr-strength-label", "children"),
-    [Input("corr-x-param", "value"), Input("corr-y-param", "value"), Input("history-query-btn", "n_clicks")],
-    [
-        State("history-boiler-select", "value"),
-        State("history-time-range", "value"),
-        State("history-start-date", "date"),
-        State("history-start-time", "value"),
-        State("history-end-date", "date"),
-        State("history-end-time", "value"),
-    ],
+    [Input("corr-x-param", "value"), Input("corr-y-param", "value"), Input("history-query-store", "data")],
 )
-def update_correlation(x_param, y_param, _, boiler_id, time_range, sd, st, ed, et):
-    start_iso, end_iso = _parse_time_range(time_range, sd, st, ed, et)
-    data = db.get_aggregated_range(boiler_id or "Boiler-1", start_iso, end_iso)
+def update_correlation(x_param, y_param, data):
     fig = go.Figure()
     pearson = "--"
     strength = "--"
@@ -502,6 +525,239 @@ def update_correlation(x_param, y_param, _, boiler_id, time_range, sd, st, ed, e
         height=360,
     )
     return fig, pearson, strength
+
+
+@app.callback(
+    Output("report-content", "children"),
+    Output("report-status", "children"),
+    Output("report-pdf-link", "href"),
+    [Input("report-generate-btn", "n_clicks")],
+    [
+        State("report-boiler-select", "value"),
+        State("report-year", "value"),
+        State("report-month", "value"),
+    ],
+)
+def generate_report(_, boiler_id, year, month):
+    if not year or not month:
+        return html.Div(), "请选择年份和月份", "#"
+    report_data = _compute_report_data(boiler_id, year, month)
+    if report_data is None:
+        return html.Div("该时间段内无运行数据", style={"color": ACCENT_RED, "padding": "20px"}), "无数据", "#"
+    content = _build_report_html(boiler_id, year, month, report_data)
+    pdf_href = f"/api/report/pdf?boiler_id={boiler_id}&year={year}&month={month}"
+    return content, f"报告已生成：{year}年{month}月", pdf_href
+
+
+def _compute_report_data(boiler_id, year, month):
+    from emissions import EmissionMonitor
+    em = EmissionMonitor(boiler_id)
+    report = em.get_monthly_report(boiler_id, year, month)
+    if report is None:
+        return None
+    start = datetime(year, month, 1)
+    if month == 12:
+        end = datetime(year + 1, 1, 1)
+    else:
+        end = datetime(year, month + 1, 1)
+    data = db.get_aggregated_range(boiler_id, start.isoformat(), end.isoformat())
+    eff_vals = [d.get("efficiency") for d in data if d.get("efficiency") is not None]
+    q2_vals = [d.get("q2") for d in data if d.get("q2") is not None]
+    report["avg_efficiency"] = statistics.mean(eff_vals) if eff_vals else 0
+    report["avg_q2"] = statistics.mean(q2_vals) if q2_vals else 0
+    report["data_points"] = len(data)
+    limits = db.get_emission_limits()
+    report["limits"] = limits
+    alerts = db.get_recent_alerts(boiler_id, minutes=60 * 24 * 31)
+    report["alert_list"] = alerts[:20]
+    return report
+
+
+def _build_report_html(boiler_id, year, month, r):
+    CARD = {
+        "backgroundColor": DARK_BG_CARD,
+        "border": f"1px solid {BORDER_COLOR}",
+        "borderRadius": "8px",
+        "padding": "16px",
+        "marginBottom": "16px",
+    }
+    poll_labels = {"nox": "NOx", "so2": "SO₂", "co": "CO", "dust": "粉尘"}
+    daily_rows = []
+    for day in sorted(r.get("daily_stats", {}).keys()):
+        ds = r["daily_stats"][day]
+        cells = [html.Td(day, style={"color": TEXT_SECONDARY, "padding": "6px 10px", "borderBottom": f"1px solid {BORDER_COLOR}"})]
+        for p in ["nox", "so2", "co", "dust"]:
+            v = ds.get(p, {})
+            mean_v = v.get("mean", 0)
+            max_v = v.get("max", 0)
+            cells.append(html.Td(f"{mean_v:.1f} / {max_v:.1f}", style={"color": TEXT_PRIMARY, "padding": "6px 10px", "borderBottom": f"1px solid {BORDER_COLOR}", "textAlign": "center"}))
+        daily_rows.append(html.Tr(cells))
+
+    alert_rows = []
+    for a in r.get("alert_list", []):
+        alert_rows.append(html.Tr([
+            html.Td(a.get("timestamp", "")[:19], style={"color": TEXT_SECONDARY, "padding": "6px 10px"}),
+            html.Td(a.get("pollutant", ""), style={"color": ACCENT_ORANGE if a.get("level") == "warning" else ACCENT_RED, "padding": "6px 10px"}),
+            html.Td(a.get("level", ""), style={"color": ACCENT_RED if a.get("level") == "alarm" else ACCENT_ORANGE, "padding": "6px 10px"}),
+            html.Td(f"{a.get('value', 0):.1f}", style={"color": TEXT_PRIMARY, "padding": "6px 10px"}),
+            html.Td(f"{a.get('limit_val', 0):.1f}", style={"color": TEXT_PRIMARY, "padding": "6px 10px"}),
+        ]))
+
+    children = [
+        html.Div([
+            html.Div(f"锅炉编号: {boiler_id}", style={"color": TEXT_SECONDARY, "fontSize": "14px", "marginRight": "24px"}),
+            html.Div(f"报告周期: {year}年{month}月", style={"color": TEXT_SECONDARY, "fontSize": "14px", "marginRight": "24px"}),
+            html.Div(f"数据点数: {r.get('data_points', 0)}", style={"color": TEXT_SECONDARY, "fontSize": "14px"}),
+        ], style={"marginBottom": "16px", "display": "flex"}),
+
+        html.Div("合规概览", style={"color": ACCENT_CYAN, "fontSize": "16px", "fontWeight": "600", "marginBottom": "12px"}),
+        dbc.Row([
+            dbc.Col(html.Div([
+                html.Div("合规率评分", style={"color": TEXT_SECONDARY, "fontSize": "12px", "marginBottom": "6px"}),
+                html.Div(f"{r.get('compliance_rate', 0):.1f}%", style={"color": ACCENT_GREEN if r.get('compliance_rate', 0) >= 90 else ACCENT_RED, "fontSize": "36px", "fontWeight": "700", "fontFamily": "Consolas, monospace"}),
+                html.Div(f"达标小时数/总运行小时数", style={"color": TEXT_SECONDARY, "fontSize": "11px", "marginTop": "4px"}),
+            ], style=CARD), width=3),
+            dbc.Col(html.Div([
+                html.Div("平均燃烧效率", style={"color": TEXT_SECONDARY, "fontSize": "12px", "marginBottom": "6px"}),
+                html.Div(f"{r.get('avg_efficiency', 0):.2f}%", style={"color": ACCENT_GREEN, "fontSize": "36px", "fontWeight": "700", "fontFamily": "Consolas, monospace"}),
+            ], style=CARD), width=3),
+            dbc.Col(html.Div([
+                html.Div("超标告警次数", style={"color": TEXT_SECONDARY, "fontSize": "12px", "marginBottom": "6px"}),
+                html.Div(str(r.get("alert_count", 0)), style={"color": ACCENT_RED if r.get("alert_count", 0) > 0 else ACCENT_GREEN, "fontSize": "36px", "fontWeight": "700", "fontFamily": "Consolas, monospace"}),
+            ], style=CARD), width=3),
+            dbc.Col(html.Div([
+                html.Div("总运行时长", style={"color": TEXT_SECONDARY, "fontSize": "12px", "marginBottom": "6px"}),
+                html.Div(f"{r.get('total_hours', 0):.1f}h", style={"color": ACCENT_CYAN, "fontSize": "36px", "fontWeight": "700", "fontFamily": "Consolas, monospace"}),
+            ], style=CARD), width=3),
+        ], style={"marginBottom": "16px"}),
+
+        html.Div("排放指标日均趋势", style={"color": ACCENT_CYAN, "fontSize": "16px", "fontWeight": "600", "marginBottom": "12px"}),
+        html.Div([
+            html.Table([
+                html.Tr([
+                    html.Th("日期", style={"color": TEXT_PRIMARY, "padding": "8px 10px", "borderBottom": f"2px solid {ACCENT_CYAN}"}),
+                    *[html.Th(f"{poll_labels.get(p, p)} 均值/峰值", style={"color": TEXT_PRIMARY, "padding": "8px 10px", "borderBottom": f"2px solid {ACCENT_CYAN}", "textAlign": "center"}) for p in ["nox", "so2", "co", "dust"]],
+                ]),
+                *daily_rows,
+            ], style={"width": "100%", "borderCollapse": "collapse"}),
+        ], style=CARD),
+
+        html.Div("排放总量估算 (kg)", style={"color": ACCENT_CYAN, "fontSize": "16px", "fontWeight": "600", "marginBottom": "12px", "marginTop": "8px"}),
+        dbc.Row([
+            dbc.Col(html.Div([
+                html.Div(poll_labels.get(p, p), style={"color": TEXT_SECONDARY, "fontSize": "12px", "marginBottom": "4px"}),
+                html.Div(f"{r.get('total_emission_kg', {}).get(p, 0):.1f}", style={"color": ACCENT_ORANGE, "fontSize": "22px", "fontWeight": "700", "fontFamily": "Consolas, monospace"}),
+            ], style=CARD), width=3) for p in ["nox", "so2", "co", "dust"]
+        ], style={"marginBottom": "16px"}),
+
+        html.Div("超标记录", style={"color": ACCENT_CYAN, "fontSize": "16px", "fontWeight": "600", "marginBottom": "12px"}),
+        html.Div([
+            html.Table([
+                html.Tr([
+                    html.Th("时间", style={"color": TEXT_PRIMARY, "padding": "8px 10px", "borderBottom": f"2px solid {ACCENT_CYAN}"}),
+                    html.Th("指标", style={"color": TEXT_PRIMARY, "padding": "8px 10px", "borderBottom": f"2px solid {ACCENT_CYAN}"}),
+                    html.Th("级别", style={"color": TEXT_PRIMARY, "padding": "8px 10px", "borderBottom": f"2px solid {ACCENT_CYAN}"}),
+                    html.Th("实测值", style={"color": TEXT_PRIMARY, "padding": "8px 10px", "borderBottom": f"2px solid {ACCENT_CYAN}"}),
+                    html.Th("限值", style={"color": TEXT_PRIMARY, "padding": "8px 10px", "borderBottom": f"2px solid {ACCENT_CYAN}"}),
+                ]),
+                *(alert_rows if alert_rows else [html.Tr(html.Td("暂无超标记录", colSpan=5, style={"color": ACCENT_GREEN, "padding": "12px", "textAlign": "center"}))]),
+            ], style={"width": "100%", "borderCollapse": "collapse"}),
+        ], style=CARD),
+    ]
+    return html.Div(children)
+
+
+@server.route("/api/report/pdf")
+def api_report_pdf():
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib.units import mm
+        import io
+
+        boiler_id = request.args.get("boiler_id", "Boiler-1")
+        year = int(request.args.get("year", datetime.now().year))
+        month = int(request.args.get("month", datetime.now().month))
+
+        report = _compute_report_data(boiler_id, year, month)
+        if report is None:
+            return jsonify({"error": "no data"}), 404
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=20 * mm, bottomMargin=20 * mm)
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle("Title2", parent=styles["Title"], fontSize=18, spaceAfter=12)
+        heading_style = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=14, spaceAfter=8, spaceBefore=12)
+        normal_style = ParagraphStyle("Normal2", parent=styles["Normal"], fontSize=10)
+
+        elements = []
+        elements.append(Paragraph(f"排放合规月度报告 - {boiler_id}", title_style))
+        elements.append(Paragraph(f"报告周期: {year}年{month}月 | 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}", normal_style))
+        elements.append(Spacer(1, 10))
+
+        elements.append(Paragraph("合规概览", heading_style))
+        overview_data = [
+            ["指标", "数值"],
+            ["合规率", f"{report.get('compliance_rate', 0):.1f}%"],
+            ["平均燃烧效率", f"{report.get('avg_efficiency', 0):.2f}%"],
+            ["超标告警次数", str(report.get('alert_count', 0))],
+            ["总运行时长(h)", f"{report.get('total_hours', 0):.1f}"],
+        ]
+        t = Table(overview_data, colWidths=[80 * mm, 80 * mm])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A5F")),
+            ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ]))
+        elements.append(t)
+        elements.append(Spacer(1, 10))
+
+        elements.append(Paragraph("排放总量估算 (kg)", heading_style))
+        em_data = [["指标", "排放总量(kg)"]]
+        for p in ["nox", "so2", "co", "dust"]:
+            em_data.append([p.upper(), f"{report.get('total_emission_kg', {}).get(p, 0):.1f}"])
+        t2 = Table(em_data, colWidths=[80 * mm, 80 * mm])
+        t2.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A5F")),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ]))
+        elements.append(t2)
+        elements.append(Spacer(1, 10))
+
+        elements.append(Paragraph("日均排放趋势", heading_style))
+        daily_data = [["日期", "NOx均值/峰值", "SO2均值/峰值", "CO均值/峰值", "粉尘均值/峰值"]]
+        for day in sorted(report.get("daily_stats", {}).keys()):
+            ds = report["daily_stats"][day]
+            row = [day]
+            for p in ["nox", "so2", "co", "dust"]:
+                v = ds.get(p, {})
+                row.append(f"{v.get('mean', 0):.1f}/{v.get('max', 0):.1f}")
+            daily_data.append(row)
+        t3 = Table(daily_data, colWidths=[30 * mm, 35 * mm, 35 * mm, 35 * mm, 35 * mm])
+        t3.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A5F")),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ]))
+        elements.append(t3)
+
+        doc.build(elements)
+        buf.seek(0)
+        from flask import Response
+        return Response(
+            buf.getvalue(),
+            mimetype="application/pdf",
+            headers={"Content-Disposition": f"attachment;filename=emission_report_{boiler_id}_{year}{month:02d}.pdf"},
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

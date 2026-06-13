@@ -170,6 +170,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS suggestions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 boiler_id TEXT,
+                rule_key TEXT,
                 created_at TEXT,
                 expires_at TEXT,
                 priority INTEGER,
@@ -180,6 +181,10 @@ def init_db():
                 active INTEGER DEFAULT 1
             )
         """)
+        try:
+            c.execute("ALTER TABLE suggestions ADD COLUMN rule_key TEXT")
+        except Exception:
+            pass
         c.execute("""
             CREATE TABLE IF NOT EXISTS config_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -403,13 +408,21 @@ def get_recent_alerts(boiler_id, minutes=60):
 def add_suggestion(boiler_id, suggestion):
     now = datetime.now()
     expires = now + timedelta(seconds=60)
+    rule_key = suggestion.get("rule_key")
     with get_db() as conn:
+        conn.execute("UPDATE suggestions SET active=0 WHERE expires_at<?", (now.isoformat(),))
+        if rule_key:
+            conn.execute(
+                "UPDATE suggestions SET active=0 WHERE boiler_id=? AND rule_key=? AND active=1",
+                (boiler_id, rule_key),
+            )
         conn.execute(
             """INSERT INTO suggestions
-               (boiler_id, created_at, expires_at, priority, urgency, diagnosis, action, expected_effect, active)
-               VALUES (?,?,?,?,?,?,?,?,1)""",
+               (boiler_id, rule_key, created_at, expires_at, priority, urgency, diagnosis, action, expected_effect, active)
+               VALUES (?,?,?,?,?,?,?,?,?,1)""",
             (
                 boiler_id,
+                rule_key,
                 now.isoformat(),
                 expires.isoformat(),
                 suggestion["priority"],
@@ -421,15 +434,77 @@ def add_suggestion(boiler_id, suggestion):
         )
 
 
+def replace_suggestions(boiler_id, new_suggestions):
+    now = datetime.now()
+    with get_db() as conn:
+        conn.execute("UPDATE suggestions SET active=0 WHERE boiler_id=?", (boiler_id,))
+        for s in new_suggestions:
+            expires = now + timedelta(seconds=60)
+            conn.execute(
+                """INSERT INTO suggestions
+                   (boiler_id, rule_key, created_at, expires_at, priority, urgency, diagnosis, action, expected_effect, active)
+                   VALUES (?,?,?,?,?,?,?,?,?,1)""",
+                (
+                    boiler_id,
+                    s.get("rule_key"),
+                    now.isoformat(),
+                    expires.isoformat(),
+                    s["priority"],
+                    s["urgency"],
+                    s["diagnosis"],
+                    s["action"],
+                    s["expected_effect"],
+                ),
+            )
+
+
 def get_active_suggestions(boiler_id):
     now = datetime.now().isoformat()
     with get_db() as conn:
         conn.execute("UPDATE suggestions SET active=0 WHERE expires_at<?", (now,))
         rows = conn.execute(
-            "SELECT * FROM suggestions WHERE boiler_id=? AND active=1 ORDER BY priority DESC, created_at DESC LIMIT 5",
+            "SELECT * FROM suggestions WHERE boiler_id=? AND active=1 ORDER BY priority DESC, created_at DESC",
             (boiler_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        seen_keys = set()
+        deduped = []
+        duplicate_ids = []
+        for r in rows:
+            rk = r["rule_key"] if "rule_key" in r.keys() else None
+            if not rk:
+                diag = r["diagnosis"] or ""
+                if "排烟温度" in diag and "氧量" in diag:
+                    rk = "exhaust_high_o2_high"
+                elif "CO浓度" in diag and "氧量" in diag:
+                    rk = "co_spike_o2_low"
+                elif "飞灰含碳量" in diag and "给煤量" in diag:
+                    rk = "fly_ash_high_coal_high"
+                elif "过热器" in diag and "温差" in diag:
+                    rk = "sh_temp_diff"
+                elif "氧量偏差" in diag:
+                    rk = "o2_deviation"
+                elif "主蒸汽温度" in diag and "偏低" in diag:
+                    rk = "main_steam_temp_low"
+                else:
+                    rk = f"gen_{diag[:15]}"
+            if rk in seen_keys:
+                duplicate_ids.append(r["id"])
+                continue
+            seen_keys.add(rk)
+            item = dict(r)
+            if "rule_key" not in item:
+                item["rule_key"] = rk
+            deduped.append(item)
+        for did in duplicate_ids:
+            conn.execute("UPDATE suggestions SET active=0 WHERE id=?", (did,))
+        return deduped[:5]
+
+def clear_all_suggestions(boiler_id=None):
+    with get_db() as conn:
+        if boiler_id:
+            conn.execute("UPDATE suggestions SET active=0 WHERE boiler_id=?", (boiler_id,))
+        else:
+            conn.execute("UPDATE suggestions SET active=0")
 
 
 def get_config_history(limit=50):

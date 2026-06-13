@@ -80,7 +80,7 @@ def _make_section_title(text, color=ACCENT_CYAN):
     )
 
 
-def _make_stat_card(title, value, subtitle="", color=ACCENT_CYAN, extra=None):
+def _make_stat_card(card_id, title, value, subtitle="", color=ACCENT_CYAN, extra=None):
     children = [
         html.Div(
             title,
@@ -92,6 +92,7 @@ def _make_stat_card(title, value, subtitle="", color=ACCENT_CYAN, extra=None):
         ),
         html.Div(
             value,
+            id=f"stat-value-{card_id}",
             style={
                 "color": color,
                 "fontSize": "28px",
@@ -104,6 +105,7 @@ def _make_stat_card(title, value, subtitle="", color=ACCENT_CYAN, extra=None):
         children.append(
             html.Div(
                 subtitle,
+                id=f"stat-sub-{card_id}",
                 style={
                     "color": TEXT_SECONDARY,
                     "fontSize": "12px",
@@ -352,36 +354,42 @@ def build_efficiency_cards():
             dbc.Row(
                 [
                     _make_stat_card(
+                        "avg-eff",
                         "平均燃烧效率",
                         "-- %",
                         "时间段内均值",
                         ACCENT_GREEN,
                     ),
                     _make_stat_card(
+                        "max-eff",
                         "最高效率",
                         "-- %",
                         "--:--:--",
                         ACCENT_CYAN,
                     ),
                     _make_stat_card(
+                        "min-eff",
                         "最低效率",
                         "-- %",
                         "--:--:--",
                         ACCENT_ORANGE,
                     ),
                     _make_stat_card(
+                        "std-eff",
                         "效率标准差",
                         "--",
                         "波动性指标",
                         ACCENT_RED,
                     ),
                     _make_stat_card(
+                        "avg-q2",
                         "排烟热损失 q2",
                         "-- %",
                         "均值",
                         TEXT_PRIMARY,
                     ),
                     _make_stat_card(
+                        "avg-q3",
                         "气体不完全燃烧 q3",
                         "-- %",
                         "均值",
@@ -393,12 +401,14 @@ def build_efficiency_cards():
             dbc.Row(
                 [
                     _make_stat_card(
+                        "avg-q4",
                         "固体不完全燃烧 q4",
                         "-- %",
                         "均值",
                         TEXT_PRIMARY,
                     ),
                     _make_stat_card(
+                        "avg-q5",
                         "散热损失 q5",
                         "-- %",
                         "均值",
@@ -571,6 +581,7 @@ def build_correlation_section():
 def build_history_layout():
     return html.Div(
         [
+            dcc.Store(id="history-query-store"),
             html.Div(
                 "工业锅炉 · 历史数据分析",
                 style={
