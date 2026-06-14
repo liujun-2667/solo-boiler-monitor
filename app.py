@@ -33,6 +33,7 @@ from layouts.dashboard import (
     build_emission_gauge,
     build_suggestion_card,
     DARK_BG,
+    DARK_BG_CARD,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
     BORDER_COLOR,
@@ -40,6 +41,7 @@ from layouts.dashboard import (
     ACCENT_GREEN,
     ACCENT_YELLOW,
     ACCENT_RED,
+    ACCENT_ORANGE,
 )
 
 db.init_db()
