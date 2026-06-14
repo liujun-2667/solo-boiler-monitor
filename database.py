@@ -219,6 +219,43 @@ def init_db():
                 changed_at TEXT
             )
         """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS health_scores (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                boiler_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                combustion_score REAL,
+                steam_water_score REAL,
+                emission_score REAL,
+                efficiency_score REAL,
+                overall_score REAL,
+                combustion_details TEXT,
+                steam_water_details TEXT,
+                emission_details TEXT,
+                efficiency_details TEXT
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS predictive_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                boiler_id TEXT NOT NULL,
+                generated_at TEXT NOT NULL,
+                param_key TEXT NOT NULL,
+                param_name TEXT,
+                predicted_exceed_time TEXT,
+                current_value REAL,
+                predicted_peak REAL,
+                threshold_value REAL,
+                minutes_to_exceed REAL,
+                status TEXT DEFAULT 'active'
+            )
+        """)
+        try:
+            c.execute("ALTER TABLE predictive_alerts ADD COLUMN resolved_at TEXT")
+        except Exception:
+            pass
+        c.execute("CREATE INDEX IF NOT EXISTS idx_health_boiler_ts ON health_scores(boiler_id, timestamp)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_pred_alert_boiler ON predictive_alerts(boiler_id, status)")
         conn.commit()
         _seed_defaults(conn)
 
@@ -657,3 +694,116 @@ def get_hourly_emission_stats(boiler_id, start_time, end_time):
             d["window_start"] = r["window_start"]
             result.append(d)
         return result
+
+
+def insert_health_score(boiler_id, scores, details):
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO health_scores
+               (boiler_id, timestamp, combustion_score, steam_water_score, emission_score,
+                efficiency_score, overall_score, combustion_details, steam_water_details,
+                emission_details, efficiency_details)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                boiler_id,
+                now,
+                scores.get("combustion"),
+                scores.get("steam_water"),
+                scores.get("emission"),
+                scores.get("efficiency"),
+                scores.get("overall"),
+                json.dumps(details.get("combustion"), ensure_ascii=False),
+                json.dumps(details.get("steam_water"), ensure_ascii=False),
+                json.dumps(details.get("emission"), ensure_ascii=False),
+                json.dumps(details.get("efficiency"), ensure_ascii=False),
+            ),
+        )
+
+
+def get_latest_health_score(boiler_id):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM health_scores WHERE boiler_id=? ORDER BY timestamp DESC LIMIT 1",
+            (boiler_id,),
+        ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        for key in ["combustion_details", "steam_water_details", "emission_details", "efficiency_details"]:
+            if result.get(key):
+                try:
+                    result[key] = json.loads(result[key])
+                except Exception:
+                    pass
+        return result
+
+
+def get_health_score_history(boiler_id, minutes=120):
+    start = (datetime.now() - timedelta(minutes=minutes)).isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM health_scores WHERE boiler_id=? AND timestamp>=? ORDER BY timestamp",
+            (boiler_id, start),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def insert_predictive_alert(boiler_id, param_key, param_name, predicted_exceed_time,
+                            current_value, predicted_peak, threshold_value, minutes_to_exceed):
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO predictive_alerts
+               (boiler_id, generated_at, param_key, param_name, predicted_exceed_time,
+                current_value, predicted_peak, threshold_value, minutes_to_exceed, status)
+               VALUES (?,?,?,?,?,?,?,?,?, 'active')""",
+            (
+                boiler_id,
+                now,
+                param_key,
+                param_name,
+                predicted_exceed_time,
+                current_value,
+                predicted_peak,
+                threshold_value,
+                minutes_to_exceed,
+            ),
+        )
+
+
+def expire_old_predictive_alerts(boiler_id):
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE predictive_alerts SET status='expired' WHERE boiler_id=? AND predicted_exceed_time<? AND status='active'",
+            (boiler_id, now),
+        )
+
+
+def get_active_predictive_alerts(boiler_id):
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM predictive_alerts WHERE boiler_id=? AND status='active' ORDER BY minutes_to_exceed ASC",
+            (boiler_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def resolve_predictive_alert(alert_id):
+    with get_db() as conn:
+        now = datetime.now().isoformat()
+        conn.execute(
+            "UPDATE predictive_alerts SET status='resolved', resolved_at=? WHERE id=?",
+            (now, alert_id),
+        )
+
+
+def update_predictive_alert(alert_id, predicted_exceed_time, current_value, predicted_peak, minutes_to_exceed):
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE predictive_alerts
+               SET predicted_exceed_time=?, current_value=?, predicted_peak=?, minutes_to_exceed=?
+               WHERE id=?""",
+            (predicted_exceed_time, current_value, predicted_peak, minutes_to_exceed, alert_id),
+        )

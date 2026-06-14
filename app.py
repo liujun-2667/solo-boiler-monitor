@@ -16,12 +16,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import database as db
 from engine import engine
+from health_engine import run_health_assessment, predict_trends, TREND_PARAMS
 from layouts import (
     build_dashboard_layout,
     build_history_layout,
     build_config_layout,
     register_config_callbacks,
     build_report_layout,
+    build_health_layout,
 )
 from layouts.dashboard import (
     KEY_PARAMS,
@@ -165,6 +167,7 @@ def build_main_navbar():
                 dbc.Nav(
                     [
                         dbc.NavItem(dbc.NavLink("实时监控", href="/", active="exact", style={"color": "#fff"})),
+                        dbc.NavItem(dbc.NavLink("设备健康", href="/health", active="exact", style={"color": "#fff"})),
                         dbc.NavItem(dbc.NavLink("历史分析", href="/history", active="exact", style={"color": "#fff"})),
                         dbc.NavItem(dbc.NavLink("合规报告", href="/report", active="exact", style={"color": "#fff"})),
                         dbc.NavItem(dbc.NavLink("系统配置", href="/config", active="exact", style={"color": "#fff"})),
@@ -198,6 +201,8 @@ app.layout = html.Div(
 def display_page(pathname):
     if pathname == "/history":
         return build_history_layout()
+    elif pathname == "/health":
+        return build_health_layout()
     elif pathname == "/report":
         return build_report_layout()
     elif pathname == "/config":
@@ -1020,6 +1025,300 @@ def update_alert_history(_, boiler_id):
 
     rows = [build_alert_history_row(a) for a in history]
     return rows, f"({total_count}条)"
+
+
+@app.callback(
+    [
+        Output("health-gauge-combustion", "figure"),
+        Output("health-gauge-steam_water", "figure"),
+        Output("health-gauge-emission", "figure"),
+        Output("health-gauge-efficiency", "figure"),
+        Output("health-tooltip-combustion", "children"),
+        Output("health-tooltip-steam_water", "children"),
+        Output("health-tooltip-emission", "children"),
+        Output("health-tooltip-efficiency", "children"),
+        Output("health-overall-bar", "style"),
+        Output("health-overall-score-text", "children"),
+        Output("health-trend-data-store", "data"),
+    ],
+    [Input("health-interval", "n_intervals")],
+)
+def update_health_gauges(_):
+    from layouts.health import SUBSYSTEM_INFO, _score_color, _build_ring_figure
+
+    boiler_id = "Boiler-1"
+    latest = engine.get_latest(boiler_id)
+
+    if not latest or not latest.get("data"):
+        empty_figs = [_build_ring_figure(0, TEXT_SECONDARY) for _ in range(4)]
+        empty_tooltips = [html.Div("暂无数据", style={"color": TEXT_SECONDARY}) for _ in range(4)]
+        return empty_figs[0], empty_figs[1], empty_figs[2], empty_figs[3], \
+               empty_tooltips[0], empty_tooltips[1], empty_tooltips[2], empty_tooltips[3], \
+               {"width": "0%"}, "--", {}
+
+    data = latest["data"]
+    metrics = latest.get("metrics", {})
+    scores, details, trend_results = run_health_assessment(boiler_id, data, metrics)
+
+    figs = []
+    tooltips = []
+    for info in SUBSYSTEM_INFO:
+        key = info["key"]
+        score = scores.get(key, 0)
+        color = _score_color(score)
+        fig = _build_ring_figure(score, color)
+        figs.append(fig)
+
+        detail = details.get(info["detail_key"], {})
+        if detail:
+            rows = []
+            for dim_name, dim_score in detail.items():
+                if isinstance(dim_score, (int, float)):
+                    dim_color = _score_color(dim_score * 4) if "占比" in dim_name or "效率" in dim_name else _score_color(dim_score)
+                    rows.append(html.Tr([
+                        html.Td(dim_name, style={"color": TEXT_SECONDARY, "fontSize": "11px", "padding": "3px 8px 3px 0", "textAlign": "left"}),
+                        html.Td(
+                            f"{dim_score:.1f}" if isinstance(dim_score, float) else str(dim_score),
+                            style={"color": dim_color, "fontSize": "11px", "fontWeight": "600", "padding": "3px 0 3px 8px", "textAlign": "right", "fontFamily": "Consolas, monospace"}
+                        ),
+                    ]))
+                else:
+                    rows.append(html.Tr([
+                        html.Td(dim_name, style={"color": TEXT_SECONDARY, "fontSize": "11px", "padding": "3px 8px 3px 0", "textAlign": "left"}),
+                        html.Td(
+                            str(dim_score),
+                            style={"color": ACCENT_CYAN, "fontSize": "11px", "padding": "3px 0 3px 8px", "textAlign": "right", "fontFamily": "Consolas, monospace"}
+                        ),
+                    ]))
+            tooltip_content = html.Div([
+                html.Div(info["name"] + " · 维度明细", style={"color": color, "fontSize": "12px", "fontWeight": "700", "marginBottom": "6px", "paddingBottom": "4px", "borderBottom": f"1px solid {BORDER_COLOR}"}),
+                html.Table(rows, style={"width": "100%", "borderCollapse": "collapse"}),
+            ])
+            tooltips.append(tooltip_content)
+        else:
+            tooltips.append(html.Div("暂无维度明细", style={"color": TEXT_SECONDARY}))
+
+    overall = scores.get("overall", 0)
+    overall_color = _score_color(overall)
+
+    trend_serializable = {}
+    for pk, pr in trend_results.items():
+        if pr is not None:
+            trend_serializable[pk] = pr
+
+    return (
+        figs[0], figs[1], figs[2], figs[3],
+        tooltips[0], tooltips[1], tooltips[2], tooltips[3],
+        {"height": "8px", "width": f"{overall}%", "backgroundColor": overall_color, "borderRadius": "4px", "transition": "width 0.6s ease"},
+        f"{overall:.0f}",
+        trend_serializable,
+    )
+
+
+@app.callback(
+    [Output("health-trend-chart", "figure"), Output("health-trend-direction-label", "children")],
+    [Input("health-trend-data-store", "data"), Input("health-trend-param-select", "value")],
+)
+def update_health_trend_chart(trend_data, param_key):
+    from layouts.health import DARK_BG, DARK_BG_CARD, DARK_BG_INPUT, ACCENT_CYAN, ACCENT_GREEN, ACCENT_YELLOW, ACCENT_RED, TEXT_PRIMARY, TEXT_SECONDARY, BORDER_COLOR
+
+    fig = go.Figure()
+    direction_text = "--"
+
+    if not trend_data or param_key not in trend_data:
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(tickfont=dict(color=TEXT_SECONDARY), showgrid=True, gridcolor=BORDER_COLOR, zeroline=False),
+            yaxis=dict(tickfont=dict(color=TEXT_SECONDARY), showgrid=True, gridcolor=BORDER_COLOR, zeroline=False),
+            margin=dict(l=50, r=50, t=30, b=40),
+            height=400,
+        )
+        return fig, direction_text
+
+    result = trend_data[param_key]
+    param_name = result.get("param_name", param_key)
+    param_unit = result.get("param_unit", "")
+
+    history_values = result.get("history_values", [])
+    history_times_raw = result.get("history_times", [])
+    history_times = []
+    for ht in history_times_raw:
+        try:
+            history_times.append(datetime.fromisoformat(ht))
+        except Exception:
+            history_times.append(ht)
+
+    future_times_raw = result.get("future_times", [])
+    future_times = []
+    for ft in future_times_raw:
+        try:
+            future_times.append(datetime.fromisoformat(ft))
+        except Exception:
+            future_times.append(ft)
+
+    predicted = result.get("predicted_values", [])
+    upper = result.get("confidence_upper", [])
+    lower = result.get("confidence_lower", [])
+    alarm_high = result.get("alarm_high")
+    alarm_low = result.get("alarm_low")
+
+    direction = result.get("trend_direction", "--")
+    dir_color = ACCENT_GREEN if direction == "平稳" else ACCENT_YELLOW if direction == "上升" else ACCENT_CYAN
+    direction_text = f"趋势: {direction}"
+
+    if history_times and history_values:
+        fig.add_trace(go.Scatter(
+            x=history_times,
+            y=history_values,
+            mode="lines",
+            name=f"{param_name} (历史)",
+            line=dict(color=ACCENT_CYAN, width=2),
+        ))
+
+    if future_times and predicted:
+        fig.add_trace(go.Scatter(
+            x=future_times,
+            y=predicted,
+            mode="lines",
+            name=f"{param_name} (预测)",
+            line=dict(color=ACCENT_YELLOW, width=2, dash="dash"),
+        ))
+
+        if upper and lower:
+            fig.add_trace(go.Scatter(
+                x=future_times + future_times[::-1],
+                y=upper + lower[::-1],
+                fill="toself",
+                fillcolor=f"rgba({int(ACCENT_YELLOW[1:3],16)},{int(ACCENT_YELLOW[3:5],16)},{int(ACCENT_YELLOW[5:7],16)},0.12)",
+                line=dict(color="rgba(0,0,0,0)"),
+                name="置信区间",
+                showlegend=True,
+            ))
+
+    if alarm_high is not None and history_values:
+        all_vals = history_values + predicted
+        if any(v > alarm_high for v in all_vals if v is not None):
+            fig.add_hline(
+                y=alarm_high,
+                line_dash="dash",
+                line_color=ACCENT_RED,
+                line_width=1.5,
+                annotation_text=f"告警上限 {alarm_high}",
+                annotation_font_color=ACCENT_RED,
+                annotation_font_size=11,
+            )
+
+    if alarm_low is not None and history_values:
+        all_vals = history_values + predicted
+        if any(v < alarm_low for v in all_vals if v is not None):
+            fig.add_hline(
+                y=alarm_low,
+                line_dash="dash",
+                line_color=ACCENT_RED,
+                line_width=1.5,
+                annotation_text=f"告警下限 {alarm_low}",
+                annotation_font_color=ACCENT_RED,
+                annotation_font_size=11,
+            )
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(tickfont=dict(color=TEXT_SECONDARY), showgrid=True, gridcolor=BORDER_COLOR, zeroline=False),
+        yaxis=dict(
+            title=dict(text=f"{param_name} ({param_unit})", font=dict(color=TEXT_SECONDARY, size=12)),
+            tickfont=dict(color=TEXT_SECONDARY),
+            showgrid=True,
+            gridcolor=BORDER_COLOR,
+            zeroline=False,
+        ),
+        legend=dict(font=dict(color=TEXT_PRIMARY), orientation="h", yanchor="bottom", y=1.02),
+        margin=dict(l=50, r=50, t=30, b=40),
+        height=400,
+    )
+
+    return fig, direction_text
+
+
+@app.callback(
+    Output("health-predictive-alerts-list", "children"),
+    [Input("health-interval", "n_intervals")],
+)
+def update_predictive_alerts(_):
+    from layouts.health import DARK_BG_INPUT, ACCENT_RED, ACCENT_YELLOW, ACCENT_ORANGE, TEXT_PRIMARY, TEXT_SECONDARY, BORDER_COLOR
+
+    boiler_id = "Boiler-1"
+    alerts = db.get_active_predictive_alerts(boiler_id)
+
+    if not alerts:
+        return html.Div(
+            "暂无预测性告警",
+            style={"color": TEXT_SECONDARY, "textAlign": "center", "padding": "24px", "fontSize": "13px"},
+        )
+
+    rows = []
+    for a in alerts:
+        generated_at = a.get("generated_at", "")
+        try:
+            ga = datetime.fromisoformat(generated_at)
+            gen_time_str = ga.strftime("%H:%M:%S")
+        except Exception:
+            gen_time_str = generated_at[:19]
+
+        predicted_time = a.get("predicted_exceed_time", "")
+        try:
+            pt = datetime.fromisoformat(predicted_time)
+            pred_time_str = pt.strftime("%H:%M:%S")
+        except Exception:
+            pred_time_str = predicted_time[:19]
+
+        param_name = a.get("param_name", a.get("param_key", ""))
+        minutes_to = a.get("minutes_to_exceed", 0)
+        current_val = a.get("current_value", 0)
+        predicted_peak = a.get("predicted_peak", 0)
+        threshold = a.get("threshold_value", 0)
+
+        rows.append(html.Div(
+            [
+                html.Div(
+                    [
+                        html.Span(
+                            "⚠ 预测性告警",
+                            style={"color": ACCENT_RED, "fontSize": "13px", "fontWeight": "600", "marginRight": "12px"},
+                        ),
+                        html.Span(
+                            param_name,
+                            style={"color": TEXT_PRIMARY, "fontSize": "13px", "fontWeight": "500"},
+                        ),
+                        html.Span(
+                            f"预计{minutes_to:.0f}分钟后超标",
+                            style={"color": ACCENT_YELLOW, "fontSize": "12px", "marginLeft": "12px"},
+                        ),
+                    ],
+                    style={"marginBottom": "6px", "display": "flex", "alignItems": "center"},
+                ),
+                html.Div(
+                    [
+                        html.Span(f"生成时间: {gen_time_str}", style={"color": TEXT_SECONDARY, "fontSize": "11px", "marginRight": "16px"}),
+                        html.Span(f"预计超标: {pred_time_str}", style={"color": ACCENT_YELLOW, "fontSize": "11px", "marginRight": "16px"}),
+                        html.Span(f"当前值: {current_val:.1f}", style={"color": TEXT_PRIMARY, "fontSize": "11px", "fontFamily": "Consolas, monospace", "marginRight": "16px"}),
+                        html.Span(f"预计峰值: {predicted_peak:.1f}", style={"color": ACCENT_RED, "fontSize": "11px", "fontWeight": "600", "fontFamily": "Consolas, monospace"}),
+                    ],
+                    style={"display": "flex", "flexWrap": "wrap", "gap": "4px"},
+                ),
+            ],
+            style={
+                "backgroundColor": DARK_BG_INPUT,
+                "border": f"1px solid {BORDER_COLOR}",
+                "borderLeft": f"3px solid {ACCENT_RED}",
+                "borderRadius": "6px",
+                "padding": "12px",
+                "marginBottom": "8px",
+            },
+        ))
+
+    return rows
 
 
 if __name__ == "__main__":
