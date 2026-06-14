@@ -1050,15 +1050,36 @@ def update_health_gauges(_):
     latest = engine.get_latest(boiler_id)
 
     if not latest or not latest.get("data"):
-        empty_figs = [_build_ring_figure(0, TEXT_SECONDARY) for _ in range(4)]
-        empty_tooltips = [html.Div("暂无数据", style={"color": TEXT_SECONDARY}) for _ in range(4)]
-        return empty_figs[0], empty_figs[1], empty_figs[2], empty_figs[3], \
-               empty_tooltips[0], empty_tooltips[1], empty_tooltips[2], empty_tooltips[3], \
-               {"width": "0%"}, "--", {}
-
-    data = latest["data"]
-    metrics = latest.get("metrics", {})
-    scores, details, trend_results = run_health_assessment(boiler_id, data, metrics)
+        latest_health = db.get_latest_health_score(boiler_id)
+        if latest_health:
+            scores = {
+                "combustion": latest_health.get("combustion_score", 0),
+                "steam_water": latest_health.get("steam_water_score", 0),
+                "emission": latest_health.get("emission_score", 0),
+                "efficiency": latest_health.get("efficiency_score", 0),
+                "overall": latest_health.get("overall_score", 0),
+            }
+            details = {}
+            for key in ["combustion", "steam_water", "emission", "efficiency"]:
+                detail_key = f"{key}_details"
+                if latest_health.get(detail_key):
+                    try:
+                        details[key] = json.loads(latest_health[detail_key])
+                    except Exception:
+                        details[key] = {}
+                else:
+                    details[key] = {}
+            trend_results = {}
+        else:
+            empty_figs = [_build_ring_figure(0, TEXT_SECONDARY) for _ in range(4)]
+            empty_tooltips = [html.Div("暂无数据", style={"color": TEXT_SECONDARY}) for _ in range(4)]
+            return empty_figs[0], empty_figs[1], empty_figs[2], empty_figs[3], \
+                   empty_tooltips[0], empty_tooltips[1], empty_tooltips[2], empty_tooltips[3], \
+                   {"width": "0%"}, "--", {}
+    else:
+        data = latest["data"]
+        metrics = latest.get("metrics", {})
+        scores, details, trend_results = run_health_assessment(boiler_id, data, metrics)
 
     figs = []
     tooltips = []

@@ -27,10 +27,10 @@ BORDER_COLOR = "#1E3A5F"
 
 
 SUBSYSTEM_INFO = [
-    {"key": "combustion", "name": "燃烧系统", "icon": "🔥", "detail_key": "combustion_details"},
-    {"key": "steam_water", "name": "汽水系统", "icon": "💧", "detail_key": "steam_water_details"},
-    {"key": "emission", "name": "排放系统", "icon": "🏭", "detail_key": "emission_details"},
-    {"key": "efficiency", "name": "整体效率", "icon": "⚡", "detail_key": "efficiency_details"},
+    {"key": "combustion", "name": "燃烧系统", "icon": "🔥", "detail_key": "combustion"},
+    {"key": "steam_water", "name": "汽水系统", "icon": "💧", "detail_key": "steam_water"},
+    {"key": "emission", "name": "排放系统", "icon": "🏭", "detail_key": "emission"},
+    {"key": "efficiency", "name": "整体效率", "icon": "⚡", "detail_key": "efficiency"},
 ]
 
 
