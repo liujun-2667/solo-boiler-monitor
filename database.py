@@ -158,14 +158,39 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 boiler_id TEXT,
                 timestamp TEXT,
+                start_time TEXT,
+                resolved_time TEXT,
                 pollutant TEXT,
                 type TEXT,
                 level TEXT,
                 value REAL,
+                peak_value REAL DEFAULT 0,
                 limit_val REAL,
-                duration REAL DEFAULT 0
+                duration REAL DEFAULT 0,
+                status TEXT DEFAULT 'active',
+                notified INTEGER DEFAULT 0
             )
         """)
+        try:
+            c.execute("ALTER TABLE alerts ADD COLUMN start_time TEXT")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE alerts ADD COLUMN resolved_time TEXT")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE alerts ADD COLUMN peak_value REAL DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE alerts ADD COLUMN status TEXT DEFAULT 'active'")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE alerts ADD COLUMN notified INTEGER DEFAULT 0")
+        except Exception:
+            pass
         c.execute("""
             CREATE TABLE IF NOT EXISTS suggestions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -388,10 +413,13 @@ def get_aggregated_range(boiler_id, start_time, end_time):
 
 
 def insert_alert(boiler_id, pollutant, alert_type, level, value, limit_val):
+    now = datetime.now().isoformat()
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO alerts (boiler_id, timestamp, pollutant, type, level, value, limit_val) VALUES (?,?,?,?,?,?,?)",
-            (boiler_id, datetime.now().isoformat(), pollutant, alert_type, level, value, limit_val),
+            """INSERT INTO alerts
+               (boiler_id, timestamp, start_time, pollutant, type, level, value, peak_value, limit_val, duration, status, notified)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (boiler_id, now, now, pollutant, alert_type, level, value, value, limit_val, 0, 'active', 0),
         )
 
 
@@ -403,6 +431,108 @@ def get_recent_alerts(boiler_id, minutes=60):
             (boiler_id, start),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_active_alerts(boiler_id):
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM alerts WHERE boiler_id=? AND status='active' ORDER BY start_time ASC",
+            (boiler_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_active_alert_by_key(boiler_id, pollutant, alert_type, level):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM alerts WHERE boiler_id=? AND pollutant=? AND type=? AND level=? AND status='active' ORDER BY start_time DESC LIMIT 1",
+            (boiler_id, pollutant, alert_type, level),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def update_alert_peak(alert_id, value, current_hourly=None):
+    with get_db() as conn:
+        now = datetime.now()
+        row = conn.execute("SELECT * FROM alerts WHERE id=?", (alert_id,)).fetchone()
+        if row:
+            start_ts = datetime.fromisoformat(row["start_time"])
+            duration = (now - start_ts).total_seconds()
+            new_peak = max(row["peak_value"] or 0, value or 0)
+            update_fields = ["peak_value=?", "duration=?"]
+            update_values = [new_peak, duration]
+            if current_hourly is not None:
+                update_fields.append("value=?")
+                update_values.append(current_hourly)
+            update_values.append(alert_id)
+            conn.execute(
+                f"UPDATE alerts SET {', '.join(update_fields)} WHERE id=?",
+                tuple(update_values),
+            )
+
+
+def resolve_alert(alert_id):
+    with get_db() as conn:
+        now = datetime.now().isoformat()
+        row = conn.execute("SELECT * FROM alerts WHERE id=?", (alert_id,)).fetchone()
+        if row:
+            start_ts = datetime.fromisoformat(row["start_time"])
+            duration = (datetime.fromisoformat(now) - start_ts).total_seconds()
+            conn.execute(
+                "UPDATE alerts SET status='resolved', resolved_time=?, duration=? WHERE id=?",
+                (now, duration, alert_id),
+            )
+
+
+def resolve_all_active_for_pollutant(boiler_id, pollutant):
+    with get_db() as conn:
+        now = datetime.now().isoformat()
+        rows = conn.execute(
+            "SELECT * FROM alerts WHERE boiler_id=? AND pollutant=? AND status='active'",
+            (boiler_id, pollutant),
+        ).fetchall()
+        for row in rows:
+            start_ts = datetime.fromisoformat(row["start_time"])
+            duration = (datetime.fromisoformat(now) - start_ts).total_seconds()
+            conn.execute(
+                "UPDATE alerts SET status='resolved', resolved_time=?, duration=? WHERE id=?",
+                (now, duration, row["id"]),
+            )
+
+
+def get_unnotified_alerts(boiler_id):
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM alerts WHERE boiler_id=? AND notified=0 ORDER BY timestamp ASC",
+            (boiler_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_alerts_notified(alert_ids):
+    if not alert_ids:
+        return
+    with get_db() as conn:
+        for aid in alert_ids:
+            conn.execute("UPDATE alerts SET notified=1 WHERE id=?", (aid,))
+
+
+def get_alert_history(boiler_id, limit=50):
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM alerts WHERE boiler_id=? ORDER BY timestamp DESC LIMIT ?",
+            (boiler_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_alert_count(boiler_id):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM alerts WHERE boiler_id=?",
+            (boiler_id,),
+        ).fetchone()
+        return row["cnt"] if row else 0
 
 
 def add_suggestion(boiler_id, suggestion):

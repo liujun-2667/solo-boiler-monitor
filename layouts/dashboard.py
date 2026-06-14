@@ -805,9 +805,347 @@ def build_top_navbar():
     )
 
 
+POLLUTANT_NAMES = {
+    "nox": "氮氧化物 NOx",
+    "so2": "二氧化硫 SO₂",
+    "co": "一氧化碳 CO",
+    "dust": "粉尘",
+}
+
+POLLUTANT_UNITS = {
+    "nox": "mg/m³",
+    "so2": "mg/m³",
+    "co": "ppm",
+    "dust": "mg/m³",
+}
+
+
+def build_alert_toast_card(alert_data, index=0, is_new=True, is_exiting=False):
+    alert_id = alert_data.get("id", 0)
+    pollutant = alert_data.get("pollutant", "")
+    pollutant_name = POLLUTANT_NAMES.get(pollutant, pollutant)
+    unit = POLLUTANT_UNITS.get(pollutant, "")
+    current_val = alert_data.get("value", 0)
+    limit_val = alert_data.get("limit_val", 1)
+    exceed_pct = max(0, ((current_val - limit_val) / max(1, limit_val)) * 100)
+    timestamp = alert_data.get("timestamp", "")
+    try:
+        from datetime import datetime
+        ts = datetime.fromisoformat(timestamp)
+        time_str = ts.strftime("%H:%M:%S")
+    except Exception:
+        time_str = timestamp[11:19] if len(timestamp) > 19 else timestamp
+
+    if is_exiting:
+        anim_class = "alert-toast-exit"
+    elif is_new:
+        anim_class = "alert-toast-enter"
+    else:
+        anim_class = "alert-toast-stay"
+
+    return html.Div(
+        id={"type": "alert-toast", "index": alert_id},
+        className=anim_class,
+        children=[
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Span(
+                                "⚠",
+                                style={
+                                    "color": "#fff",
+                                    "fontSize": "18px",
+                                    "marginRight": "8px",
+                                },
+                            ),
+                            html.Span(
+                                "排放超标告警",
+                                style={
+                                    "color": "#fff",
+                                    "fontSize": "14px",
+                                    "fontWeight": "700",
+                                },
+                            ),
+                            html.Span(
+                                time_str,
+                                style={
+                                    "color": "rgba(255,255,255,0.75)",
+                                    "fontSize": "12px",
+                                    "marginLeft": "auto",
+                                    "fontFamily": "Consolas, monospace",
+                                },
+                            ),
+                        ],
+                        style={
+                            "display": "flex",
+                            "alignItems": "center",
+                            "marginBottom": "8px",
+                        },
+                    ),
+                    html.Div(
+                        [
+                            html.Span(
+                                pollutant_name,
+                                style={
+                                    "color": "#fff",
+                                    "fontSize": "13px",
+                                    "fontWeight": "600",
+                                },
+                            ),
+                            html.Span(
+                                f"  当前值: {current_val:.1f}{unit}",
+                                style={
+                                    "color": "#fff",
+                                    "fontSize": "12px",
+                                    "fontFamily": "Consolas, monospace",
+                                },
+                            ),
+                            html.Span(
+                                f"  限值: {limit_val:.1f}{unit}",
+                                style={
+                                    "color": "rgba(255,255,255,0.8)",
+                                    "fontSize": "12px",
+                                    "fontFamily": "Consolas, monospace",
+                                },
+                            ),
+                        ],
+                        style={"marginBottom": "6px"},
+                    ),
+                    html.Div(
+                        [
+                            html.Span(
+                                "超标幅度: ",
+                                style={
+                                    "color": "rgba(255,255,255,0.8)",
+                                    "fontSize": "12px",
+                                },
+                            ),
+                            html.Span(
+                                f"+{exceed_pct:.1f}%",
+                                style={
+                                    "color": "#fff",
+                                    "fontSize": "14px",
+                                    "fontWeight": "700",
+                                    "fontFamily": "Consolas, monospace",
+                                },
+                            ),
+                        ],
+                    ),
+                ],
+                style={
+                    "padding": "12px 16px",
+                    "backgroundColor": "rgba(255, 77, 109, 0.95)",
+                    "border": "1px solid #FF4D6D",
+                    "borderLeft": "4px solid #fff",
+                    "borderRadius": "6px",
+                    "boxShadow": "0 4px 16px rgba(255, 77, 109, 0.4)",
+                    "width": "320px",
+                    "color": "#fff",
+                },
+            ),
+        ],
+        style={},
+    )
+
+
+def build_alerts_container():
+    return html.Div(
+        id="alerts-toast-container",
+        children=[],
+        style={
+            "position": "fixed",
+            "top": "20px",
+            "right": "20px",
+            "zIndex": 9999,
+            "display": "flex",
+            "flexDirection": "column",
+            "gap": "10px",
+            "pointerEvents": "none",
+            "width": "340px",
+        },
+    )
+
+
+def build_alert_history_row(alert_data):
+    pollutant = alert_data.get("pollutant", "")
+    pollutant_name = POLLUTANT_NAMES.get(pollutant, pollutant)
+    unit = POLLUTANT_UNITS.get(pollutant, "")
+    peak_val = alert_data.get("peak_value", alert_data.get("value", 0))
+    duration_sec = alert_data.get("duration", 0) or 0
+    if duration_sec >= 3600:
+        duration_str = f"{int(duration_sec // 3600)}h {int((duration_sec % 3600) // 60)}m"
+    elif duration_sec >= 60:
+        duration_str = f"{int(duration_sec // 60)}m {int(duration_sec % 60)}s"
+    else:
+        duration_str = f"{int(duration_sec)}s"
+
+    timestamp = alert_data.get("timestamp", "")
+    try:
+        from datetime import datetime
+        ts = datetime.fromisoformat(timestamp)
+        time_str = ts.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        time_str = timestamp[:19]
+
+    status = alert_data.get("status", "active")
+    status_color = ACCENT_RED if status == "active" else ACCENT_GREEN
+    status_text = "持续中" if status == "active" else "已结束"
+
+    return html.Tr(
+        [
+            html.Td(time_str, style={"color": TEXT_SECONDARY, "padding": "8px 12px", "borderBottom": f"1px solid {BORDER_COLOR}", "fontFamily": "Consolas, monospace", "fontSize": "12px"}),
+            html.Td(pollutant_name, style={"color": TEXT_PRIMARY, "padding": "8px 12px", "borderBottom": f"1px solid {BORDER_COLOR}", "fontSize": "12px"}),
+            html.Td(duration_str, style={"color": TEXT_PRIMARY, "padding": "8px 12px", "borderBottom": f"1px solid {BORDER_COLOR}", "fontSize": "12px", "fontFamily": "Consolas, monospace"}),
+            html.Td(
+                [
+                    html.Span(f"{peak_val:.1f}", style={"color": ACCENT_RED, "fontFamily": "Consolas, monospace", "fontSize": "12px", "fontWeight": "600"}),
+                    html.Span(f" {unit}", style={"color": TEXT_SECONDARY, "fontSize": "11px"}),
+                ],
+                style={"padding": "8px 12px", "borderBottom": f"1px solid {BORDER_COLOR}"},
+            ),
+            html.Td(
+                html.Span(
+                    status_text,
+                    style={
+                        "color": status_color,
+                        "fontSize": "11px",
+                        "padding": "2px 8px",
+                        "borderRadius": "3px",
+                        "backgroundColor": f"rgba({int(status_color[1:3],16)}, {int(status_color[3:5],16)}, {int(status_color[5:7],16)}, 0.15)",
+                    },
+                ),
+                style={"padding": "8px 12px", "borderBottom": f"1px solid {BORDER_COLOR}"},
+            ),
+        ]
+    )
+
+
+def build_alert_history_panel():
+    return html.Div(
+        [
+            html.Div(
+                id="alert-history-header",
+                children=[
+                    html.Div(
+                        [
+                            html.Span(
+                                "📋",
+                                style={"fontSize": "16px", "marginRight": "8px"},
+                            ),
+                            html.Span(
+                                "告警记录",
+                                style={
+                                    "color": TEXT_PRIMARY,
+                                    "fontSize": "14px",
+                                    "fontWeight": "600",
+                                },
+                            ),
+                            html.Span(
+                                id="alert-history-count",
+                                children="(0条)",
+                                style={
+                                    "color": ACCENT_RED,
+                                    "fontSize": "13px",
+                                    "fontWeight": "600",
+                                    "marginLeft": "6px",
+                                },
+                            ),
+                        ],
+                        style={"display": "flex", "alignItems": "center"},
+                    ),
+                    html.Span(
+                        id="alert-history-chevron",
+                        children="▼",
+                        style={
+                            "color": TEXT_SECONDARY,
+                            "fontSize": "12px",
+                            "transition": "transform 0.3s",
+                        },
+                    ),
+                ],
+                style={
+                    "display": "flex",
+                    "justifyContent": "space-between",
+                    "alignItems": "center",
+                    "padding": "10px 20px",
+                    "cursor": "pointer",
+                    "backgroundColor": DARK_BG_CARD,
+                    "border": f"1px solid {BORDER_COLOR}",
+                    "borderRadius": "8px 8px 0 0",
+                    "userSelect": "none",
+                },
+            ),
+            html.Div(
+                id="alert-history-body",
+                children=[
+                    html.Div(
+                        [
+                            html.Table(
+                                [
+                                    html.Thead(
+                                        html.Tr(
+                                            [
+                                                html.Th("时间", style={"color": TEXT_PRIMARY, "padding": "10px 12px", "borderBottom": f"2px solid {ACCENT_CYAN}", "textAlign": "left", "fontSize": "12px", "fontWeight": "600"}),
+                                                html.Th("超标指标", style={"color": TEXT_PRIMARY, "padding": "10px 12px", "borderBottom": f"2px solid {ACCENT_CYAN}", "textAlign": "left", "fontSize": "12px", "fontWeight": "600"}),
+                                                html.Th("持续时长", style={"color": TEXT_PRIMARY, "padding": "10px 12px", "borderBottom": f"2px solid {ACCENT_CYAN}", "textAlign": "left", "fontSize": "12px", "fontWeight": "600"}),
+                                                html.Th("峰值", style={"color": TEXT_PRIMARY, "padding": "10px 12px", "borderBottom": f"2px solid {ACCENT_CYAN}", "textAlign": "left", "fontSize": "12px", "fontWeight": "600"}),
+                                                html.Th("状态", style={"color": TEXT_PRIMARY, "padding": "10px 12px", "borderBottom": f"2px solid {ACCENT_CYAN}", "textAlign": "left", "fontSize": "12px", "fontWeight": "600"}),
+                                            ]
+                                        )
+                                    ),
+                                    html.Tbody(
+                                        id="alert-history-tbody",
+                                        children=[
+                                            html.Tr(
+                                                html.Td(
+                                                    "暂无告警记录",
+                                                    colSpan=5,
+                                                    style={
+                                                        "color": TEXT_SECONDARY,
+                                                        "padding": "20px",
+                                                        "textAlign": "center",
+                                                        "fontSize": "13px",
+                                                    },
+                                                )
+                                            )
+                                        ],
+                                    ),
+                                ],
+                                style={"width": "100%", "borderCollapse": "collapse"},
+                            ),
+                        ],
+                        style={
+                            "maxHeight": "320px",
+                            "overflowY": "auto",
+                        },
+                    ),
+                ],
+                style={
+                    "backgroundColor": DARK_BG_CARD,
+                    "border": f"1px solid {BORDER_COLOR}",
+                    "borderTop": "none",
+                    "borderRadius": "0 0 8px 8px",
+                    "padding": "0",
+                    "display": "none",
+                },
+            ),
+        ],
+        style={
+            "position": "fixed",
+            "bottom": "0",
+            "left": "0",
+            "right": "0",
+            "zIndex": 9997,
+            "padding": "0 20px",
+        },
+    )
+
+
 def build_dashboard_layout():
     return html.Div(
         [
+            build_alerts_container(),
             build_top_navbar(),
             build_key_params_section(),
             build_efficiency_section(),
@@ -828,6 +1166,8 @@ def build_dashboard_layout():
                 ],
                 style={"margin": "0"},
             ),
+            html.Div(style={"height": "80px"}),
+            build_alert_history_panel(),
             dcc.Interval(
                 id="dashboard-interval",
                 interval=3000,
@@ -836,6 +1176,10 @@ def build_dashboard_layout():
             dcc.Store(id="dashboard-latest-data", data=None),
             dcc.Store(id="dashboard-history-data", data=None),
             dcc.Store(id="dashboard-suggestions", data=None),
+            dcc.Store(id="alert-master-store", data=None),
+            dcc.Store(id="active-alert-ids-store", data=[]),
+            dcc.Store(id="alert-display-times-store", data={}),
+            dcc.Store(id="alert-history-collapsed", data=True),
         ],
         style={
             "backgroundColor": DARK_BG,

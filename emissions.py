@@ -9,7 +9,7 @@ class EmissionMonitor:
         self.boiler_id = boiler_id
         self.hourly_buffers = {p: deque() for p in ["nox", "so2", "co", "dust"]}
         self.alert_state = {p: {"warning": False, "alarm": False} for p in ["nox", "so2", "co", "dust"]}
-        self.active_alerts = {}
+        self.active_alert_ids = {}
 
     def _prune_buffer(self, buf, minutes=60):
         cutoff = datetime.now() - timedelta(minutes=minutes)
@@ -32,15 +32,27 @@ class EmissionMonitor:
             hourly_limit = lim.get("hourly", 100)
             peak_limit = lim.get("peak", 200)
             level = "normal"
-            if val > peak_limit:
+
+            over_peak = val > peak_limit
+            over_hourly = hourly_mean > hourly_limit
+            near_limit = hourly_mean > hourly_limit * 0.8 or val > peak_limit * 0.8
+
+            if over_peak:
                 level = "alarm"
-                self._trigger_alert(pollutant, "peak", "alarm", val, peak_limit)
-            elif hourly_mean > hourly_limit:
+                self._ensure_alert(pollutant, "peak", "alarm", val, peak_limit, hourly_mean)
+                self._resolve_alert_if_exists(pollutant, "hourly", "warning")
+            elif over_hourly:
                 level = "alarm"
-                self._trigger_alert(pollutant, "hourly", "alarm", hourly_mean, hourly_limit)
-            elif hourly_mean > hourly_limit * 0.8 or val > peak_limit * 0.8:
+                self._ensure_alert(pollutant, "hourly", "alarm", hourly_mean, hourly_limit, val)
+                self._resolve_alert_if_exists(pollutant, "hourly", "warning")
+            elif near_limit:
                 level = "warning"
-                self._trigger_alert(pollutant, "hourly", "warning", max(hourly_mean, val), hourly_limit)
+                self._ensure_alert(pollutant, "hourly", "warning", max(hourly_mean, val), hourly_limit, val)
+            else:
+                self._resolve_alert_if_exists(pollutant, "peak", "alarm")
+                self._resolve_alert_if_exists(pollutant, "hourly", "alarm")
+                self._resolve_alert_if_exists(pollutant, "hourly", "warning")
+
             results[pollutant] = {
                 "value": round(val, 2),
                 "hourly_mean": round(hourly_mean, 2),
@@ -50,14 +62,36 @@ class EmissionMonitor:
             }
         return results
 
-    def _trigger_alert(self, pollutant, alert_type, level, value, limit_val):
-        key = f"{pollutant}_{alert_type}_{level}"
-        now = datetime.now()
-        if key in self.active_alerts:
-            self.active_alerts[key]["duration"] = (now - self.active_alerts[key]["start"]).total_seconds()
+    def _key(self, pollutant, alert_type, level):
+        return f"{pollutant}_{alert_type}_{level}"
+
+    def _ensure_alert(self, pollutant, alert_type, level, value, limit_val, peak_val=None):
+        key = self._key(pollutant, alert_type, level)
+        if key in self.active_alert_ids:
+            alert_id = self.active_alert_ids[key]
+            pv = peak_val if peak_val is not None else value
+            db.update_alert_peak(alert_id, pv, current_hourly=value)
             return
-        self.active_alerts[key] = {"start": now, "duration": 0}
+        existing = db.get_active_alert_by_key(self.boiler_id, pollutant, alert_type, level)
+        if existing:
+            self.active_alert_ids[key] = existing["id"]
+            pv = peak_val if peak_val is not None else value
+            db.update_alert_peak(existing["id"], pv, current_hourly=value)
+            return
         db.insert_alert(self.boiler_id, pollutant, alert_type, level, value, limit_val)
+        new_alert = db.get_active_alert_by_key(self.boiler_id, pollutant, alert_type, level)
+        if new_alert:
+            self.active_alert_ids[key] = new_alert["id"]
+
+    def _resolve_alert_if_exists(self, pollutant, alert_type, level):
+        key = self._key(pollutant, alert_type, level)
+        if key in self.active_alert_ids:
+            db.resolve_alert(self.active_alert_ids[key])
+            del self.active_alert_ids[key]
+            return
+        existing = db.get_active_alert_by_key(self.boiler_id, pollutant, alert_type, level)
+        if existing:
+            db.resolve_alert(existing["id"])
 
     def get_monthly_report(self, boiler_id, year, month):
         start = datetime(year, month, 1)

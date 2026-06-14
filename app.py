@@ -32,6 +32,8 @@ from layouts.dashboard import (
     build_heat_loss_chart,
     build_emission_gauge,
     build_suggestion_card,
+    build_alert_toast_card,
+    build_alert_history_row,
     DARK_BG,
     DARK_BG_CARD,
     TEXT_PRIMARY,
@@ -40,6 +42,7 @@ from layouts.dashboard import (
     ACCENT_CYAN,
     ACCENT_GREEN,
     ACCENT_YELLOW,
+    ACCENT_ORANGE,
     ACCENT_RED,
     ACCENT_ORANGE,
 )
@@ -52,6 +55,82 @@ app = dash.Dash(
     external_stylesheets=[dbc.themes.DARKLY],
     title="工业锅炉监控平台",
 )
+
+app.index_string = """
+<!DOCTYPE html>
+<html>
+<head>
+    {%metas%}
+    <title>{%title%}</title>
+    {%favicon%}
+    {%css%}
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.3/dist/darkly/bootstrap.min.css">
+    <style>
+        @keyframes slideInRight {
+            0% {
+                transform: translateX(420px);
+                opacity: 0;
+            }
+            60% {
+                transform: translateX(-8px);
+                opacity: 1;
+            }
+            100% {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        @keyframes fadeOutRight {
+            0% {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            100% {
+                transform: translateX(420px);
+                opacity: 0;
+            }
+        }
+        .alert-toast-enter {
+            animation: slideInRight 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
+        .alert-toast-stay {
+            animation: none;
+        }
+        .alert-toast-exit {
+            animation: fadeOutRight 0.35s ease-in both;
+        }
+        #alert-history-header:hover {
+            filter: brightness(1.08);
+        }
+        #alert-history-body::-webkit-scrollbar {
+            width: 6px;
+        }
+        #alert-history-body::-webkit-scrollbar-track {
+            background: rgba(255,255,255,0.03);
+            border-radius: 3px;
+        }
+        #alert-history-body::-webkit-scrollbar-thumb {
+            background: rgba(0,212,255,0.4);
+            border-radius: 3px;
+        }
+        #alert-history-body::-webkit-scrollbar-thumb:hover {
+            background: rgba(0,212,255,0.6);
+        }
+    </style>
+</head>
+<body style="margin:0;padding:0;background-color:#0B1A2B;">
+    {%app_entry%}
+    <footer>
+        {%config%}
+        {%scripts%}
+        {%renderer%}
+    </footer>
+</body>
+</html>
+"""
 
 server = app.server
 
@@ -760,6 +839,187 @@ def api_report_pdf():
         )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+ALERT_CARD_LIFETIME = 10000
+ALERT_EXIT_DURATION = 400
+MAX_VISIBLE_ALERTS = 3
+
+
+@app.callback(
+    Output("alert-master-store", "data"),
+    Input("dashboard-interval", "n_intervals"),
+    State("dashboard-boiler-select", "value"),
+    State("alert-master-store", "data"),
+    prevent_initial_call=True,
+)
+def compute_alert_state(_, boiler_id, prev_state):
+    prev_state = prev_state or {"active_ids": [], "display_times": {}, "exiting_ids": {}}
+    boiler = boiler_id or "Boiler-1"
+    active_ids = list(prev_state.get("active_ids", []))
+    display_times = dict(prev_state.get("display_times", {}))
+    exiting_ids = dict(prev_state.get("exiting_ids", {}))
+    has_changes = False
+
+    unnotified = db.get_unnotified_alerts(boiler)
+    if unnotified:
+        has_changes = True
+        new_ids = [a["id"] for a in unnotified]
+        db.mark_alerts_notified(new_ids)
+        for aid in new_ids:
+            if aid not in active_ids:
+                active_ids.append(aid)
+        now_ms_new = int(datetime.now().timestamp() * 1000)
+        for aid in new_ids:
+            display_times[str(aid)] = now_ms_new
+
+    now_ms = int(datetime.now().timestamp() * 1000)
+    still_active = []
+    for aid in active_ids:
+        dt = display_times.get(str(aid))
+        if dt is not None and now_ms - dt >= ALERT_CARD_LIFETIME:
+            exiting_ids[str(aid)] = now_ms
+            has_changes = True
+            continue
+        still_active.append(aid)
+
+    finished_exiting = []
+    for aid_key, exit_time in exiting_ids.items():
+        if now_ms - exit_time >= ALERT_EXIT_DURATION:
+            finished_exiting.append(aid_key)
+    for aid_key in finished_exiting:
+        del exiting_ids[aid_key]
+        has_changes = True
+
+    if not has_changes:
+        return dash.no_update
+
+    cleaned_display_times = {
+        k: v for k, v in display_times.items() if int(k) in still_active
+    }
+
+    now_add = int(datetime.now().timestamp() * 1000)
+    visible_ids = still_active[:MAX_VISIBLE_ALERTS]
+    for aid in visible_ids:
+        key = str(aid)
+        if key not in cleaned_display_times:
+            cleaned_display_times[key] = now_add
+
+    return {
+        "active_ids": still_active,
+        "display_times": cleaned_display_times,
+        "visible_ids": visible_ids,
+        "exiting_ids": exiting_ids,
+    }
+
+
+@app.callback(
+    Output("alerts-toast-container", "children"),
+    Output("active-alert-ids-store", "data"),
+    Output("alert-display-times-store", "data"),
+    Input("alert-master-store", "data"),
+    State("dashboard-boiler-select", "value"),
+    State("active-alert-ids-store", "data"),
+    prevent_initial_call=True,
+)
+def render_alert_cards(state, boiler_id, prev_active_ids):
+    if not state:
+        return dash.no_update, dash.no_update, dash.no_update
+    visible_ids = state.get("visible_ids", [])
+    exiting_ids = state.get("exiting_ids", {})
+    if not visible_ids and not exiting_ids:
+        return [], state.get("active_ids", []), state.get("display_times", {})
+    boiler = boiler_id or "Boiler-1"
+    all_alerts = db.get_alert_history(boiler, limit=200)
+    alert_map = {a["id"]: a for a in all_alerts}
+    prev_set = set(prev_active_ids or [])
+    cards = []
+    for aid_key in exiting_ids:
+        aid = int(aid_key)
+        if aid in alert_map:
+            cards.append(build_alert_toast_card(alert_map[aid], len(cards), is_new=False, is_exiting=True))
+    for i, aid in enumerate(visible_ids):
+        if aid in alert_map:
+            is_new = aid not in prev_set
+            cards.append(build_alert_toast_card(alert_map[aid], len(cards), is_new=is_new))
+    return cards, state.get("active_ids", []), state.get("display_times", {})
+
+
+@app.callback(
+    Output("alert-history-body", "style"),
+    Output("alert-history-chevron", "style"),
+    Output("alert-history-collapsed", "data"),
+    Input("alert-history-header", "n_clicks"),
+    State("alert-history-collapsed", "data"),
+)
+def toggle_alert_history(n_clicks, is_collapsed):
+    if n_clicks is None:
+        return dash.no_update, dash.no_update, dash.no_update
+
+    new_collapsed = not is_collapsed
+
+    if new_collapsed:
+        body_style = {
+            "backgroundColor": DARK_BG_CARD,
+            "border": f"1px solid {BORDER_COLOR}",
+            "borderTop": "none",
+            "borderRadius": "0 0 8px 8px",
+            "padding": "0",
+            "display": "none",
+        }
+        chevron_style = {
+            "color": TEXT_SECONDARY,
+            "fontSize": "12px",
+            "transition": "transform 0.3s",
+            "transform": "rotate(0deg)",
+        }
+    else:
+        body_style = {
+            "backgroundColor": DARK_BG_CARD,
+            "border": f"1px solid {BORDER_COLOR}",
+            "borderTop": "none",
+            "borderRadius": "0 0 8px 8px",
+            "padding": "0",
+            "display": "block",
+        }
+        chevron_style = {
+            "color": TEXT_SECONDARY,
+            "fontSize": "12px",
+            "transition": "transform 0.3s",
+            "transform": "rotate(180deg)",
+        }
+
+    return body_style, chevron_style, new_collapsed
+
+
+@app.callback(
+    Output("alert-history-tbody", "children"),
+    Output("alert-history-count", "children"),
+    Input("dashboard-interval", "n_intervals"),
+    Input("dashboard-boiler-select", "value"),
+)
+def update_alert_history(_, boiler_id):
+    boiler = boiler_id or "Boiler-1"
+    history = db.get_alert_history(boiler, limit=50)
+    total_count = db.get_alert_count(boiler)
+
+    if not history:
+        empty_row = html.Tr(
+            html.Td(
+                "暂无告警记录",
+                colSpan=5,
+                style={
+                    "color": TEXT_SECONDARY,
+                    "padding": "20px",
+                    "textAlign": "center",
+                    "fontSize": "13px",
+                },
+            )
+        )
+        return [empty_row], f"({total_count}条)"
+
+    rows = [build_alert_history_row(a) for a in history]
+    return rows, f"({total_count}条)"
 
 
 if __name__ == "__main__":
