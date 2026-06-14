@@ -1200,26 +1200,19 @@ def update_health_trend_chart(trend_data, param_keys):
         alarm_high = result.get("alarm_high")
         alarm_low = result.get("alarm_low")
 
-        if i == 0:
-            yaxis_key = "y"
-            yaxes["yaxis"] = dict(
-                title=dict(text=f"{param_name} ({param_unit})", font=dict(color=TEXT_SECONDARY, size=12)),
-                tickfont=dict(color=TEXT_SECONDARY),
-                showgrid=True,
+        yaxis_key = f"y{i+1}" if i > 0 else "y"
+        yaxis_name = f"yaxis{i+1}" if i > 0 else "yaxis"
+        
+        if yaxis_name not in yaxes:
+            yaxes[yaxis_name] = dict(
+                title=dict(text=f"{param_name} ({param_unit})", font=dict(color=color, size=12)),
+                tickfont=dict(color=color),
+                overlaying="y",
+                side="right" if i > 0 else "left",
+                showgrid=False if i > 0 else True,
                 gridcolor=BORDER_COLOR,
                 zeroline=False,
             )
-        else:
-            yaxis_key = "y2"
-            if "yaxis2" not in yaxes:
-                yaxes["yaxis2"] = dict(
-                    title=dict(text=f"{param_name} ({param_unit})", font=dict(color=TEXT_SECONDARY, size=12)),
-                    tickfont=dict(color=TEXT_SECONDARY),
-                    overlaying="y",
-                    side="right",
-                    showgrid=False,
-                    zeroline=False,
-                )
 
         if history_times and history_values:
             fig.add_trace(go.Scatter(
@@ -1311,6 +1304,7 @@ def update_predictive_alerts(_, __, only_unconfirmed):
     Output("health-alerts-update-trigger", "n_intervals"),
     [Input(f"alert-confirm-btn-{aid}", "n_clicks") for aid in range(1, 100)]
     + [Input(f"alert-mute-btn-{aid}", "n_clicks") for aid in range(1, 100)],
+    [State("health-alerts-update-trigger", "n_intervals")],
     prevent_initial_call=True,
 )
 def handle_alert_action(*args):
@@ -1320,13 +1314,14 @@ def handle_alert_action(*args):
 
     triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
     alert_id = int(triggered_id.split("-")[-1])
+    current_n = args[-1]
 
     if "confirm" in triggered_id:
         db.confirm_predictive_alert(alert_id)
     elif "mute" in triggered_id:
         db.mute_predictive_alert(alert_id, minutes=30)
 
-    return dash.no_update
+    return current_n + 1
 
 
 @app.callback(
@@ -1380,7 +1375,7 @@ def update_health_compare_chart(_, date_a, start_a, end_a, date_b, start_b, end_
     bar_width = 0.35
 
     fig.add_trace(go.Bar(
-        x=[f"{name}A" for name in x],
+        x=x,
         y=avg_a,
         name="时段A",
         marker_color=ACCENT_BLUE,
@@ -1391,7 +1386,7 @@ def update_health_compare_chart(_, date_a, start_a, end_a, date_b, start_b, end_
     ))
 
     fig.add_trace(go.Bar(
-        x=[f"{name}B" for name in x],
+        x=x,
         y=avg_b,
         name="时段B",
         marker_color=ACCENT_ORANGE,
@@ -1406,9 +1401,6 @@ def update_health_compare_chart(_, date_a, start_a, end_a, date_b, start_b, end_
         plot_bgcolor="rgba(0,0,0,0)",
         barmode="group",
         xaxis=dict(
-            tickmode="array",
-            tickvals=[f"{name}A" for name in x],
-            ticktext=x,
             tickfont=dict(color=TEXT_SECONDARY),
             showgrid=False,
             zeroline=False,
