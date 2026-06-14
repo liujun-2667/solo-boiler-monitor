@@ -254,6 +254,14 @@ def init_db():
             c.execute("ALTER TABLE predictive_alerts ADD COLUMN resolved_at TEXT")
         except Exception:
             pass
+        try:
+            c.execute("ALTER TABLE predictive_alerts ADD COLUMN confirmed_at TEXT")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE predictive_alerts ADD COLUMN muted_until TEXT")
+        except Exception:
+            pass
         c.execute("CREATE INDEX IF NOT EXISTS idx_health_boiler_ts ON health_scores(boiler_id, timestamp)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_pred_alert_boiler ON predictive_alerts(boiler_id, status)")
         conn.commit()
@@ -807,3 +815,47 @@ def update_predictive_alert(alert_id, predicted_exceed_time, current_value, pred
                WHERE id=?""",
             (predicted_exceed_time, current_value, predicted_peak, minutes_to_exceed, alert_id),
         )
+
+
+def get_health_scores_by_time_range(boiler_id, start_time, end_time):
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT combustion_score, steam_water_score, emission_score, efficiency_score 
+               FROM health_scores 
+               WHERE boiler_id=? AND timestamp>=? AND timestamp<=? 
+               ORDER BY timestamp""",
+            (boiler_id, start_time, end_time),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def confirm_predictive_alert(alert_id):
+    with get_db() as conn:
+        now = datetime.now().isoformat()
+        conn.execute(
+            "UPDATE predictive_alerts SET confirmed_at=?, status='confirmed' WHERE id=?",
+            (now, alert_id),
+        )
+
+
+def mute_predictive_alert(alert_id, minutes=30):
+    with get_db() as conn:
+        muted_until = (datetime.now() + timedelta(minutes=minutes)).isoformat()
+        conn.execute(
+            "UPDATE predictive_alerts SET muted_until=?, status='muted' WHERE id=?",
+            (muted_until, alert_id),
+        )
+
+
+def get_non_muted_predictive_alerts(boiler_id, only_unconfirmed=False):
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        query = """SELECT * FROM predictive_alerts 
+                   WHERE boiler_id=? AND status IN ('active', 'confirmed') 
+                   AND (muted_until IS NULL OR muted_until < ?)"""
+        params = [boiler_id, now]
+        if only_unconfirmed:
+            query += " AND confirmed_at IS NULL"
+        query += " ORDER BY CASE WHEN confirmed_at IS NULL THEN 0 ELSE 1 END, minutes_to_exceed ASC"
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]

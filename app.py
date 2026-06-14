@@ -1137,16 +1137,15 @@ def update_health_gauges(_):
 
 
 @app.callback(
-    [Output("health-trend-chart", "figure"), Output("health-trend-direction-label", "children")],
-    [Input("health-trend-data-store", "data"), Input("health-trend-param-select", "value")],
+    Output("health-trend-chart", "figure"),
+    [Input("health-trend-data-store", "data"), Input("health-trend-param-checklist", "value")],
 )
-def update_health_trend_chart(trend_data, param_key):
-    from layouts.health import DARK_BG, DARK_BG_CARD, DARK_BG_INPUT, ACCENT_CYAN, ACCENT_GREEN, ACCENT_YELLOW, ACCENT_RED, TEXT_PRIMARY, TEXT_SECONDARY, BORDER_COLOR
+def update_health_trend_chart(trend_data, param_keys):
+    from layouts.health import DARK_BG, DARK_BG_CARD, DARK_BG_INPUT, ACCENT_CYAN, ACCENT_GREEN, ACCENT_YELLOW, ACCENT_RED, TEXT_PRIMARY, TEXT_SECONDARY, BORDER_COLOR, TREND_PARAM_COLORS
 
     fig = go.Figure()
-    direction_text = "--"
 
-    if not trend_data or param_key not in trend_data:
+    if not trend_data or not param_keys:
         fig.update_layout(
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
@@ -1155,122 +1154,148 @@ def update_health_trend_chart(trend_data, param_key):
             margin=dict(l=50, r=50, t=30, b=40),
             height=400,
         )
-        return fig, direction_text
+        return fig
 
-    result = trend_data[param_key]
-    param_name = result.get("param_name", param_key)
-    param_unit = result.get("param_unit", "")
+    layout_updates = {
+        "paper_bgcolor": "rgba(0,0,0,0)",
+        "plot_bgcolor": "rgba(0,0,0,0)",
+        "xaxis": dict(tickfont=dict(color=TEXT_SECONDARY), showgrid=True, gridcolor=BORDER_COLOR, zeroline=False),
+        "legend": dict(font=dict(color=TEXT_PRIMARY), orientation="h", yanchor="bottom", y=1.02),
+        "margin": dict(l=50, r=50, t=30, b=40),
+        "height": 400,
+        "yaxis": {},
+    }
 
-    history_values = result.get("history_values", [])
-    history_times_raw = result.get("history_times", [])
-    history_times = []
-    for ht in history_times_raw:
-        try:
-            history_times.append(datetime.fromisoformat(ht))
-        except Exception:
-            history_times.append(ht)
+    yaxes = {}
 
-    future_times_raw = result.get("future_times", [])
-    future_times = []
-    for ft in future_times_raw:
-        try:
-            future_times.append(datetime.fromisoformat(ft))
-        except Exception:
-            future_times.append(ft)
+    for i, param_key in enumerate(param_keys):
+        if param_key not in trend_data:
+            continue
 
-    predicted = result.get("predicted_values", [])
-    upper = result.get("confidence_upper", [])
-    lower = result.get("confidence_lower", [])
-    alarm_high = result.get("alarm_high")
-    alarm_low = result.get("alarm_low")
+        result = trend_data[param_key]
+        param_name = result.get("param_name", param_key)
+        param_unit = result.get("param_unit", "")
+        color = TREND_PARAM_COLORS.get(param_key, ACCENT_CYAN)
 
-    direction = result.get("trend_direction", "--")
-    dir_color = ACCENT_GREEN if direction == "平稳" else ACCENT_YELLOW if direction == "上升" else ACCENT_CYAN
-    direction_text = f"趋势: {direction}"
+        history_values = result.get("history_values", [])
+        history_times_raw = result.get("history_times", [])
+        history_times = []
+        for ht in history_times_raw:
+            try:
+                history_times.append(datetime.fromisoformat(ht))
+            except Exception:
+                history_times.append(ht)
 
-    if history_times and history_values:
-        fig.add_trace(go.Scatter(
-            x=history_times,
-            y=history_values,
-            mode="lines",
-            name=f"{param_name} (历史)",
-            line=dict(color=ACCENT_CYAN, width=2),
-        ))
+        future_times_raw = result.get("future_times", [])
+        future_times = []
+        for ft in future_times_raw:
+            try:
+                future_times.append(datetime.fromisoformat(ft))
+            except Exception:
+                future_times.append(ft)
 
-    if future_times and predicted:
-        fig.add_trace(go.Scatter(
-            x=future_times,
-            y=predicted,
-            mode="lines",
-            name=f"{param_name} (预测)",
-            line=dict(color=ACCENT_YELLOW, width=2, dash="dash"),
-        ))
+        predicted = result.get("predicted_values", [])
+        upper = result.get("confidence_upper", [])
+        lower = result.get("confidence_lower", [])
+        alarm_high = result.get("alarm_high")
+        alarm_low = result.get("alarm_low")
 
-        if upper and lower:
+        if i == 0:
+            yaxis_key = "y"
+            yaxes["yaxis"] = dict(
+                title=dict(text=f"{param_name} ({param_unit})", font=dict(color=TEXT_SECONDARY, size=12)),
+                tickfont=dict(color=TEXT_SECONDARY),
+                showgrid=True,
+                gridcolor=BORDER_COLOR,
+                zeroline=False,
+            )
+        else:
+            yaxis_key = "y2"
+            if "yaxis2" not in yaxes:
+                yaxes["yaxis2"] = dict(
+                    title=dict(text=f"{param_name} ({param_unit})", font=dict(color=TEXT_SECONDARY, size=12)),
+                    tickfont=dict(color=TEXT_SECONDARY),
+                    overlaying="y",
+                    side="right",
+                    showgrid=False,
+                    zeroline=False,
+                )
+
+        if history_times and history_values:
             fig.add_trace(go.Scatter(
-                x=future_times + future_times[::-1],
-                y=upper + lower[::-1],
-                fill="toself",
-                fillcolor=f"rgba({int(ACCENT_YELLOW[1:3],16)},{int(ACCENT_YELLOW[3:5],16)},{int(ACCENT_YELLOW[5:7],16)},0.12)",
-                line=dict(color="rgba(0,0,0,0)"),
-                name="置信区间",
-                showlegend=True,
+                x=history_times,
+                y=history_values,
+                mode="lines",
+                name=f"{param_name} (历史)",
+                line=dict(color=color, width=2),
+                yaxis=yaxis_key,
             ))
 
-    if alarm_high is not None and history_values:
-        all_vals = history_values + predicted
-        if any(v > alarm_high for v in all_vals if v is not None):
-            fig.add_hline(
-                y=alarm_high,
-                line_dash="dash",
-                line_color=ACCENT_RED,
-                line_width=1.5,
-                annotation_text=f"告警上限 {alarm_high}",
-                annotation_font_color=ACCENT_RED,
-                annotation_font_size=11,
-            )
+        if future_times and predicted:
+            fig.add_trace(go.Scatter(
+                x=future_times,
+                y=predicted,
+                mode="lines",
+                name=f"{param_name} (预测)",
+                line=dict(color=color, width=2, dash="dash"),
+                yaxis=yaxis_key,
+            ))
 
-    if alarm_low is not None and history_values:
-        all_vals = history_values + predicted
-        if any(v < alarm_low for v in all_vals if v is not None):
-            fig.add_hline(
-                y=alarm_low,
-                line_dash="dash",
-                line_color=ACCENT_RED,
-                line_width=1.5,
-                annotation_text=f"告警下限 {alarm_low}",
-                annotation_font_color=ACCENT_RED,
-                annotation_font_size=11,
-            )
+            if upper and lower:
+                rgba_vals = f"rgba({int(color[1:3],16)},{int(color[3:5],16)},{int(color[5:7],16)},0.1)"
+                fig.add_trace(go.Scatter(
+                    x=future_times + future_times[::-1],
+                    y=upper + lower[::-1],
+                    fill="toself",
+                    fillcolor=rgba_vals,
+                    line=dict(color="rgba(0,0,0,0)"),
+                    name=f"{param_name} 置信区间",
+                    showlegend=True,
+                    yaxis=yaxis_key,
+                ))
 
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(tickfont=dict(color=TEXT_SECONDARY), showgrid=True, gridcolor=BORDER_COLOR, zeroline=False),
-        yaxis=dict(
-            title=dict(text=f"{param_name} ({param_unit})", font=dict(color=TEXT_SECONDARY, size=12)),
-            tickfont=dict(color=TEXT_SECONDARY),
-            showgrid=True,
-            gridcolor=BORDER_COLOR,
-            zeroline=False,
-        ),
-        legend=dict(font=dict(color=TEXT_PRIMARY), orientation="h", yanchor="bottom", y=1.02),
-        margin=dict(l=50, r=50, t=30, b=40),
-        height=400,
-    )
+        if alarm_high is not None and history_values:
+            all_vals = history_values + predicted
+            if any(v > alarm_high for v in all_vals if v is not None):
+                fig.add_hline(
+                    y=alarm_high,
+                    line_dash="dash",
+                    line_color=ACCENT_RED,
+                    line_width=1.5,
+                    annotation_text=f"{param_name} 上限 {alarm_high}",
+                    annotation_font_color=ACCENT_RED,
+                    annotation_font_size=10,
+                )
 
-    return fig, direction_text
+        if alarm_low is not None and history_values:
+            all_vals = history_values + predicted
+            if any(v < alarm_low for v in all_vals if v is not None):
+                fig.add_hline(
+                    y=alarm_low,
+                    line_dash="dash",
+                    line_color=ACCENT_RED,
+                    line_width=1.5,
+                    annotation_text=f"{param_name} 下限 {alarm_low}",
+                    annotation_font_color=ACCENT_RED,
+                    annotation_font_size=10,
+                )
+
+    layout_updates.update(yaxes)
+    fig.update_layout(**layout_updates)
+
+    return fig
 
 
 @app.callback(
     Output("health-predictive-alerts-list", "children"),
-    [Input("health-interval", "n_intervals")],
+    [Input("health-interval", "n_intervals"), Input("health-alerts-update-trigger", "n_intervals"), Input("health-alerts-only-unconfirmed", "value")],
 )
-def update_predictive_alerts(_):
-    from layouts.health import DARK_BG_INPUT, ACCENT_RED, ACCENT_YELLOW, ACCENT_ORANGE, TEXT_PRIMARY, TEXT_SECONDARY, BORDER_COLOR
+def update_predictive_alerts(_, __, only_unconfirmed):
+    from layouts.health import build_predictive_alert_card, TEXT_SECONDARY
 
     boiler_id = "Boiler-1"
-    alerts = db.get_active_predictive_alerts(boiler_id)
+    only_unconfirmed_flag = "only_unconfirmed" in (only_unconfirmed or [])
+    alerts = db.get_non_muted_predictive_alerts(boiler_id, only_unconfirmed=only_unconfirmed_flag)
 
     if not alerts:
         return html.Div(
@@ -1278,68 +1303,130 @@ def update_predictive_alerts(_):
             style={"color": TEXT_SECONDARY, "textAlign": "center", "padding": "24px", "fontSize": "13px"},
         )
 
-    rows = []
-    for a in alerts:
-        generated_at = a.get("generated_at", "")
-        try:
-            ga = datetime.fromisoformat(generated_at)
-            gen_time_str = ga.strftime("%H:%M:%S")
-        except Exception:
-            gen_time_str = generated_at[:19]
+    cards = [build_predictive_alert_card(a) for a in alerts]
+    return cards
 
-        predicted_time = a.get("predicted_exceed_time", "")
-        try:
-            pt = datetime.fromisoformat(predicted_time)
-            pred_time_str = pt.strftime("%H:%M:%S")
-        except Exception:
-            pred_time_str = predicted_time[:19]
 
-        param_name = a.get("param_name", a.get("param_key", ""))
-        minutes_to = a.get("minutes_to_exceed", 0)
-        current_val = a.get("current_value", 0)
-        predicted_peak = a.get("predicted_peak", 0)
-        threshold = a.get("threshold_value", 0)
+@app.callback(
+    Output("health-alerts-update-trigger", "n_intervals"),
+    [Input(f"alert-confirm-btn-{aid}", "n_clicks") for aid in range(1, 100)]
+    + [Input(f"alert-mute-btn-{aid}", "n_clicks") for aid in range(1, 100)],
+    prevent_initial_call=True,
+)
+def handle_alert_action(*args):
+    ctx = callback_context
+    if not ctx.triggered:
+        return dash.no_update
 
-        rows.append(html.Div(
-            [
-                html.Div(
-                    [
-                        html.Span(
-                            "⚠ 预测性告警",
-                            style={"color": ACCENT_RED, "fontSize": "13px", "fontWeight": "600", "marginRight": "12px"},
-                        ),
-                        html.Span(
-                            param_name,
-                            style={"color": TEXT_PRIMARY, "fontSize": "13px", "fontWeight": "500"},
-                        ),
-                        html.Span(
-                            f"预计{minutes_to:.0f}分钟后超标",
-                            style={"color": ACCENT_YELLOW, "fontSize": "12px", "marginLeft": "12px"},
-                        ),
-                    ],
-                    style={"marginBottom": "6px", "display": "flex", "alignItems": "center"},
-                ),
-                html.Div(
-                    [
-                        html.Span(f"生成时间: {gen_time_str}", style={"color": TEXT_SECONDARY, "fontSize": "11px", "marginRight": "16px"}),
-                        html.Span(f"预计超标: {pred_time_str}", style={"color": ACCENT_YELLOW, "fontSize": "11px", "marginRight": "16px"}),
-                        html.Span(f"当前值: {current_val:.1f}", style={"color": TEXT_PRIMARY, "fontSize": "11px", "fontFamily": "Consolas, monospace", "marginRight": "16px"}),
-                        html.Span(f"预计峰值: {predicted_peak:.1f}", style={"color": ACCENT_RED, "fontSize": "11px", "fontWeight": "600", "fontFamily": "Consolas, monospace"}),
-                    ],
-                    style={"display": "flex", "flexWrap": "wrap", "gap": "4px"},
-                ),
-            ],
-            style={
-                "backgroundColor": DARK_BG_INPUT,
-                "border": f"1px solid {BORDER_COLOR}",
-                "borderLeft": f"3px solid {ACCENT_RED}",
-                "borderRadius": "6px",
-                "padding": "12px",
-                "marginBottom": "8px",
-            },
-        ))
+    triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
+    alert_id = int(triggered_id.split("-")[-1])
 
-    return rows
+    if "confirm" in triggered_id:
+        db.confirm_predictive_alert(alert_id)
+    elif "mute" in triggered_id:
+        db.mute_predictive_alert(alert_id, minutes=30)
+
+    return dash.no_update
+
+
+@app.callback(
+    Output("health-compare-chart", "figure"),
+    [Input("health-compare-btn", "n_clicks")],
+    [
+        State("health-compare-a-date", "date"),
+        State("health-compare-a-start", "value"),
+        State("health-compare-a-end", "value"),
+        State("health-compare-b-date", "date"),
+        State("health-compare-b-start", "value"),
+        State("health-compare-b-end", "value"),
+    ],
+    prevent_initial_call=True,
+)
+def update_health_compare_chart(_, date_a, start_a, end_a, date_b, start_b, end_b):
+    from layouts.health import ACCENT_BLUE, ACCENT_ORANGE, TEXT_PRIMARY, TEXT_SECONDARY, BORDER_COLOR
+
+    boiler_id = "Boiler-1"
+
+    def get_time_range(date_str, start_time, end_time):
+        start = datetime.strptime(f"{date_str} {start_time}", "%Y-%m-%d %H:%M")
+        end_h, end_m = map(int, end_time.split(":"))
+        if end_h == 24:
+            end = datetime.strptime(f"{date_str} 23:59", "%Y-%m-%d %H:%M")
+        else:
+            end = datetime.strptime(f"{date_str} {end_time}", "%Y-%m-%d %H:%M")
+        return start.isoformat(), end.isoformat()
+
+    start_a_iso, end_a_iso = get_time_range(date_a, start_a, end_a)
+    start_b_iso, end_b_iso = get_time_range(date_b, start_b, end_b)
+
+    scores_a = db.get_health_scores_by_time_range(boiler_id, start_a_iso, end_a_iso)
+    scores_b = db.get_health_scores_by_time_range(boiler_id, start_b_iso, end_b_iso)
+
+    def calculate_average(scores, key):
+        values = [s.get(key) for s in scores if s.get(key) is not None]
+        if not values:
+            return 0
+        return sum(values) / len(values)
+
+    subsystem_keys = ["combustion_score", "steam_water_score", "emission_score", "efficiency_score"]
+    subsystem_names = ["燃烧系统", "汽水系统", "排放系统", "整体效率"]
+
+    avg_a = [calculate_average(scores_a, k) for k in subsystem_keys]
+    avg_b = [calculate_average(scores_b, k) for k in subsystem_keys]
+
+    fig = go.Figure()
+
+    x = subsystem_names
+    bar_width = 0.35
+
+    fig.add_trace(go.Bar(
+        x=[f"{name}A" for name in x],
+        y=avg_a,
+        name="时段A",
+        marker_color=ACCENT_BLUE,
+        width=bar_width,
+        text=[f"{v:.1f}" for v in avg_a],
+        textposition="auto",
+        textfont=dict(color=TEXT_PRIMARY, size=12),
+    ))
+
+    fig.add_trace(go.Bar(
+        x=[f"{name}B" for name in x],
+        y=avg_b,
+        name="时段B",
+        marker_color=ACCENT_ORANGE,
+        width=bar_width,
+        text=[f"{v:.1f}" for v in avg_b],
+        textposition="auto",
+        textfont=dict(color=TEXT_PRIMARY, size=12),
+    ))
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        barmode="group",
+        xaxis=dict(
+            tickmode="array",
+            tickvals=[f"{name}A" for name in x],
+            ticktext=x,
+            tickfont=dict(color=TEXT_SECONDARY),
+            showgrid=False,
+            zeroline=False,
+        ),
+        yaxis=dict(
+            title=dict(text="健康度得分", font=dict(color=TEXT_SECONDARY, size=12)),
+            tickfont=dict(color=TEXT_SECONDARY),
+            showgrid=True,
+            gridcolor=BORDER_COLOR,
+            zeroline=False,
+            range=[0, 100],
+        ),
+        legend=dict(font=dict(color=TEXT_PRIMARY), orientation="h", yanchor="bottom", y=1.02),
+        margin=dict(l=50, r=50, t=30, b=40),
+        height=300,
+    )
+
+    return fig
 
 
 if __name__ == "__main__":

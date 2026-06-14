@@ -39,6 +39,92 @@ TREND_PARAM_OPTIONS = [
     for k, cfg in TREND_PARAMS.items()
 ]
 
+TREND_PARAM_COLORS = {
+    "main_steam_temp": "#00D4FF",
+    "exhaust_temp": "#FFB800",
+    "nox": "#FF4D6D",
+    "efficiency": "#00FF88",
+}
+
+
+def build_time_range_selector(prefix):
+    return html.Div(
+        [
+            html.Div(
+                "日期",
+                style={"color": TEXT_SECONDARY, "fontSize": "12px", "marginBottom": "6px"},
+            ),
+            dcc.DatePickerSingle(
+                id=f"health-compare-{prefix}-date",
+                date=datetime.now().date(),
+                style={"backgroundColor": DARK_BG_INPUT, "color": TEXT_PRIMARY},
+            ),
+        ],
+        style={"marginRight": "16px"},
+    )
+
+
+def build_time_selector(prefix):
+    return html.Div(
+        [
+            html.Div(
+                "时间范围",
+                style={"color": TEXT_SECONDARY, "fontSize": "12px", "marginBottom": "6px"},
+            ),
+            html.Div(
+                [
+                    dcc.Dropdown(
+                        id=f"health-compare-{prefix}-start",
+                        options=[
+                            {"label": "00:00", "value": "00:00"},
+                            {"label": "06:00", "value": "06:00"},
+                            {"label": "08:00", "value": "08:00"},
+                            {"label": "10:00", "value": "10:00"},
+                            {"label": "12:00", "value": "12:00"},
+                            {"label": "14:00", "value": "14:00"},
+                            {"label": "16:00", "value": "16:00"},
+                            {"label": "18:00", "value": "18:00"},
+                            {"label": "20:00", "value": "20:00"},
+                            {"label": "22:00", "value": "22:00"},
+                        ],
+                        value="08:00",
+                        clearable=False,
+                        style={
+                            "backgroundColor": DARK_BG_INPUT,
+                            "color": TEXT_PRIMARY,
+                            "width": "100px",
+                        },
+                    ),
+                    html.Span(" - ", style={"color": TEXT_SECONDARY, "margin": "0 4px"}),
+                    dcc.Dropdown(
+                        id=f"health-compare-{prefix}-end",
+                        options=[
+                            {"label": "06:00", "value": "06:00"},
+                            {"label": "08:00", "value": "08:00"},
+                            {"label": "10:00", "value": "10:00"},
+                            {"label": "12:00", "value": "12:00"},
+                            {"label": "14:00", "value": "14:00"},
+                            {"label": "16:00", "value": "16:00"},
+                            {"label": "18:00", "value": "18:00"},
+                            {"label": "20:00", "value": "20:00"},
+                            {"label": "22:00", "value": "22:00"},
+                            {"label": "24:00", "value": "24:00"},
+                        ],
+                        value="12:00",
+                        clearable=False,
+                        style={
+                            "backgroundColor": DARK_BG_INPUT,
+                            "color": TEXT_PRIMARY,
+                            "width": "100px",
+                        },
+                    ),
+                ],
+                style={"display": "flex", "alignItems": "center"},
+            ),
+        ],
+        style={"marginRight": "16px"},
+    )
+
 
 DEFAULT_CARD_STYLE = {
     "backgroundColor": DARK_BG_CARD,
@@ -239,6 +325,64 @@ def build_health_gauges_section():
     )
 
 
+def build_health_compare_section():
+    return html.Div(
+        [
+            _make_section_title("时段对比", ACCENT_BLUE),
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Div(
+                                "时段A",
+                                style={"color": ACCENT_BLUE, "fontSize": "14px", "fontWeight": "600", "marginBottom": "10px"},
+                            ),
+                            build_time_range_selector("a"),
+                            build_time_selector("a"),
+                        ],
+                        style={"display": "flex", "flexWrap": "wrap", "alignItems": "flex-end", "paddingRight": "24px", "borderRight": f"1px solid {BORDER_COLOR}"},
+                    ),
+                    html.Div(
+                        [
+                            html.Div(
+                                "时段B",
+                                style={"color": ACCENT_ORANGE, "fontSize": "14px", "fontWeight": "600", "marginBottom": "10px"},
+                            ),
+                            build_time_range_selector("b"),
+                            build_time_selector("b"),
+                        ],
+                        style={"display": "flex", "flexWrap": "wrap", "alignItems": "flex-end", "paddingLeft": "24px"},
+                    ),
+                    html.Div(
+                        dbc.Button(
+                            "生成对比",
+                            id="health-compare-btn",
+                            color="primary",
+                            style={
+                                "backgroundColor": ACCENT_CYAN,
+                                "borderColor": ACCENT_CYAN,
+                                "color": DARK_BG,
+                                "fontWeight": "600",
+                            },
+                        ),
+                        style={"alignSelf": "flex-end"},
+                    ),
+                ],
+                style={"display": "flex", "flexWrap": "wrap", "alignItems": "flex-end", "marginBottom": "16px"},
+            ),
+            dcc.Graph(
+                id="health-compare-chart",
+                style={"height": "300px"},
+                config={"displayModeBar": True, "displaylogo": False},
+            ),
+        ],
+        style={
+            **DEFAULT_CARD_STYLE,
+            "marginBottom": "16px",
+        },
+    )
+
+
 def build_trend_prediction_section():
     return html.Div(
         [
@@ -251,36 +395,24 @@ def build_trend_prediction_section():
                                 "选择参数",
                                 style={"color": TEXT_SECONDARY, "fontSize": "12px", "marginBottom": "6px"},
                             ),
-                            dcc.Dropdown(
-                                id="health-trend-param-select",
-                                options=TREND_PARAM_OPTIONS,
-                                value="main_steam_temp",
-                                clearable=False,
-                                style={
-                                    "backgroundColor": DARK_BG_INPUT,
-                                    "color": TEXT_PRIMARY,
-                                    "width": "260px",
-                                },
+                            html.Div(
+                                [
+                                    dbc.Checklist(
+                                        options=TREND_PARAM_OPTIONS,
+                                        value=["main_steam_temp"],
+                                        id="health-trend-param-checklist",
+                                        inline=True,
+                                        switch=True,
+                                        style={"color": TEXT_PRIMARY},
+                                    ),
+                                ],
+                                style={"display": "flex", "flexWrap": "wrap", "gap": "16px"},
                             ),
                         ],
-                        style={"marginRight": "20px"},
-                    ),
-                    html.Div(
-                        id="health-trend-direction-label",
-                        children="--",
-                        style={
-                            "alignSelf": "flex-end",
-                            "color": ACCENT_CYAN,
-                            "fontSize": "14px",
-                            "fontWeight": "600",
-                            "padding": "6px 16px",
-                            "backgroundColor": DARK_BG_INPUT,
-                            "border": f"1px solid {BORDER_COLOR}",
-                            "borderRadius": "6px",
-                        },
+                        style={"flex": 1},
                     ),
                 ],
-                style={"display": "flex", "alignItems": "flex-end", "marginBottom": "12px"},
+                style={"display": "flex", "alignItems": "flex-start", "marginBottom": "12px"},
             ),
             dcc.Graph(
                 id="health-trend-chart",
@@ -300,6 +432,22 @@ def build_predictive_alerts_section():
         [
             _make_section_title("预测性告警", ACCENT_RED),
             html.Div(
+                [
+                    html.Span(
+                        "只看未确认",
+                        style={"color": TEXT_SECONDARY, "fontSize": "13px", "marginRight": "8px"},
+                    ),
+                    dbc.Checklist(
+                        options=[{"label": "", "value": "only_unconfirmed"}],
+                        value=[],
+                        id="health-alerts-only-unconfirmed",
+                        switch=True,
+                        style={"display": "inline-block"},
+                    ),
+                ],
+                style={"display": "flex", "alignItems": "center", "marginBottom": "12px"},
+            ),
+            html.Div(
                 id="health-predictive-alerts-list",
                 children=[
                     html.Div(
@@ -317,10 +465,93 @@ def build_predictive_alerts_section():
     )
 
 
+def build_predictive_alert_card(alert):
+    is_confirmed = alert.get("confirmed_at") is not None
+    card_style = {
+        "backgroundColor": "#1a1a1a" if is_confirmed else DARK_BG_INPUT,
+        "border": f"1px solid {BORDER_COLOR}",
+        "borderRadius": "8px",
+        "padding": "12px",
+        "marginBottom": "8px",
+        "opacity": 0.7 if is_confirmed else 1,
+    }
+    return html.Div(
+        [
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Span(
+                                "⚠️" if not is_confirmed else "✅",
+                                style={"fontSize": "16px", "marginRight": "8px"},
+                            ),
+                            html.Span(
+                                alert.get("param_name", "未知参数"),
+                                style={"color": ACCENT_YELLOW if not is_confirmed else TEXT_SECONDARY, "fontSize": "14px", "fontWeight": "600"},
+                            ),
+                            html.Span(
+                                " · 已确认" if is_confirmed else "",
+                                style={"color": TEXT_SECONDARY, "fontSize": "12px"},
+                            ),
+                        ],
+                        style={"marginBottom": "6px"},
+                    ),
+                    html.Div(
+                        [
+                            html.Span(
+                                f"当前值: {alert.get('current_value', 0):.2f} | 预测峰值: {alert.get('predicted_peak', 0):.2f} | 阈值: {alert.get('threshold_value', 0):.2f}",
+                                style={"color": TEXT_SECONDARY, "fontSize": "12px"},
+                            ),
+                        ],
+                        style={"marginBottom": "4px"},
+                    ),
+                    html.Div(
+                        [
+                            html.Span(
+                                f"预计 {alert.get('minutes_to_exceed', 0):.0f} 分钟后超出阈值",
+                                style={"color": ACCENT_RED if not is_confirmed else TEXT_SECONDARY, "fontSize": "12px"},
+                            ),
+                        ],
+                    ),
+                ],
+                style={"flex": 1},
+            ),
+            html.Div(
+                [
+                    dbc.Button(
+                        "确认",
+                        id=f"alert-confirm-btn-{alert['id']}",
+                        size="sm",
+                        color="secondary",
+                        style={
+                            "marginRight": "8px",
+                            "fontSize": "11px",
+                            "padding": "4px 12px",
+                        },
+                    ),
+                    dbc.Button(
+                        "静默30分钟",
+                        id=f"alert-mute-btn-{alert['id']}",
+                        size="sm",
+                        color="dark",
+                        style={
+                            "fontSize": "11px",
+                            "padding": "4px 12px",
+                        },
+                    ),
+                ],
+                style={"display": "flex", "alignItems": "center"},
+            ),
+        ],
+        style={**card_style, "display": "flex", "justifyContent": "space-between", "alignItems": "center"},
+    )
+
+
 def build_health_layout():
     return html.Div(
         [
             dcc.Store(id="health-trend-data-store"),
+            dcc.Interval(id="health-alerts-update-trigger", interval=10000, n_intervals=0),
             html.Div(
                 "工业锅炉 · 设备健康度与趋势预测",
                 style={
@@ -332,6 +563,7 @@ def build_health_layout():
                 },
             ),
             build_health_gauges_section(),
+            build_health_compare_section(),
             build_trend_prediction_section(),
             build_predictive_alerts_section(),
             dcc.Interval(
